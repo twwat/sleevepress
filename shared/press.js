@@ -31,6 +31,7 @@ const DEFAULT = () => ({
   style: {},       // Style Forge state + generated prompt/exclude/structure/batch
   names: { shortlist: [], seed: 1 },
   kit: { series: [], sizes: null },
+  looks: [],       // saved looks: [{ name, look: {sleeve keys + bg/ink/accent} }]
 });
 
 /* ---------- utils ---------- */

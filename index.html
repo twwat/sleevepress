@@ -32,7 +32,7 @@
 <main class="studio">
   <section class="table" aria-label="Current sleeve">
     <div class="sleeve"><canvas id="preview" width="900" height="900" aria-label="Current front sleeve"></canvas></div>
-    <div class="table-foot"><span>front sleeve · live</span><a href="sleeve-press.html">edit →</a></div>
+    <div class="table-foot"><span class="btn-row"><button type="button" class="btn small" id="deskPrev" aria-label="Previous look">←</button><button type="button" class="btn small" id="deskShuffle">Shuffle look</button><span id="deskSeed" style="align-self:center"></span></span><a href="sleeve-press.html">edit, lock, undo →</a></div>
   </section>
 
   <aside class="ticket" aria-label="Release basics">
@@ -91,6 +91,7 @@
 </p>
 
 <script src="shared/press.js"></script>
+<script src="shared/looks.js"></script>
 <script src="shared/sleeve-render.js"></script>
 <script>
 (() => {
@@ -117,6 +118,16 @@ FIELDS.forEach(k => $(k).addEventListener("input", e => { writing = true; SP.pat
 SP.bindImageDrop({ drop: $("drop"), input: $("imageFile"), text: $("dropText"), meta: $("imgMeta"), info: $("imgInfo"), clear: $("imgClear") });
 SP.onImage(async () => { image = await SP.image(); queue(); });
 
+function deskLook(n) {
+  n = Math.max(1, n);
+  const v = Looks.randomize(SleeveRender.flatten(SP.get()), n, SP.get().sleeve.lookLocks || {});
+  const sleeve = { lookSeed: n }; Object.keys(SleeveRender.SLEEVE_DEFAULTS).forEach(k => sleeve[k] = v[k]);
+  SP.patch("sleeve", sleeve);
+  if (v.paletteName) SP.patch("palette", { bg: v.bg, ink: v.ink, accent: v.accent, name: v.paletteName });
+  $("deskSeed").textContent = `seed ${n}`;
+}
+$("deskShuffle").addEventListener("click", () => deskLook((SP.get().sleeve.lookSeed || 0) + 1));
+$("deskPrev").addEventListener("click", () => deskLook((SP.get().sleeve.lookSeed || 2) - 1));
 const queue = SP.rafOnce(async () => { try { await SleeveRender.render($("preview"), SleeveRender.flatten(SP.get()), image); } catch (e) { console.error(e); } });
 
 $("exp").addEventListener("click", SP.downloadRelease);

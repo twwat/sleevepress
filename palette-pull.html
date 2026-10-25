@@ -17,6 +17,8 @@
 .role { display: grid; grid-template-columns: 38px 1fr auto; gap: 8px; align-items: center; }
 .role .name { font: 11px var(--f-mono); color: var(--chalk-dim); display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
 .assign { display: flex; gap: 6px; }
+.presets.scroll { max-height: 190px; overflow: auto; padding-right: 4px; }
+.alts { display: flex; flex-wrap: wrap; gap: 6px; }
 </style>
 </head>
 <body>
@@ -79,7 +81,8 @@
           <button type="button" class="btn small" data-role="accent">Set as spot</button>
         </div>
         <p class="hint" id="swHint">Pick a swatch to assign it by hand; the automatic choice is only a starting point.</p>
-        <div class="presets" id="presets"></div>
+        <div class="legend">Library</div>
+        <div class="presets scroll" id="presets"></div>
       </div>
     </details>
 
@@ -90,6 +93,18 @@
         <div class="role"><input type="color" id="ink"><label class="f"><span>Ink</span><input type="text" id="inkHex" class="mono" spellcheck="false"></label><span class="name" id="inkName"></span></div>
         <div class="role"><input type="color" id="accent"><label class="f"><span>Spot</span><input type="text" id="accentHex" class="mono" spellcheck="false"></label><span class="name" id="accentName"></span></div>
         <div class="out" id="words"></div>
+        <div class="legend">Roll <output>seed <b id="rollSeed">0</b></output></div>
+        <div class="btn-row" id="rollRow">
+          <button type="button" class="btn small" data-mode="dark">Dark</button>
+          <button type="button" class="btn small" data-mode="light">Light</button>
+          <button type="button" class="btn small" data-mode="bold">Bold</button>
+          <button type="button" class="btn small" data-mode="any">Any</button>
+          <button type="button" class="btn small" id="rollBack" aria-label="Previous roll">←</button>
+        </div>
+        <div class="chips" id="roleLocks"></div>
+        <p class="hint">Locked roles stay put; the rest are rolled to clear the same contrast rules against them.</p>
+        <div class="legend">Alternatives from these swatches</div>
+        <div class="alts" id="alts"></div>
         <div class="btn-row">
           <button type="button" class="btn primary" id="apply">Apply to release</button>
           <button type="button" class="btn" id="revert">Reset to release</button>
@@ -116,6 +131,7 @@
 </main>
 
 <script src="shared/press.js"></script>
+<script src="shared/looks.js"></script>
 <script src="shared/sleeve-render.js"></script>
 <script>
 (() => {
@@ -270,6 +286,7 @@ function reflect() {
   const cur = SP.get().palette, same = ["bg", "ink", "accent"].every(k => cur[k] === cand[k]);
   $("stateOut").textContent = same ? "matches release" : "not applied yet";
   $("apply").disabled = same;
+  renderAlts();
   $("applyHint").textContent = same ? `The release already uses this palette (${cur.name || "custom"}).` : "Applying updates the sleeve, back sleeve and kit at once.";
 }
 const segs = {
@@ -288,14 +305,61 @@ $("baseHex").addEventListener("change", e => { if (SP.hexToRgb(e.target.value)) 
 });
 $("assign").addEventListener("click", e => { const b = e.target.closest("button"); if (!b || sel < 0) return; cand[b.dataset.role] = swatches[sel].hex; reflect(); queueRender(); });
 const pr = $("presets");
-SP.PRESETS.forEach(p => {
+Looks.PALETTES.forEach(p => {
   const b = document.createElement("button"); b.type = "button"; b.className = "preset";
   b.innerHTML = `<span class="chip" style="background:${p.bg}"><b style="background:${p.accent}"></b><i style="background:${p.ink}"></i></span>${p.name}`;
   b.addEventListener("click", () => { cand.bg = p.bg; cand.ink = p.ink; cand.accent = p.accent; cand.name = p.name; reflect(); queueRender(); });
   pr.appendChild(b);
 });
+/* ---------- rolling, with role locks ---------- */
+const roleLocks = { bg: false, ink: false, accent: false };
+let rollSeed = 0, lastMode = "any";
+function roll(mode, seed) {
+  const rnd = SP.mulberry32(seed * 7907 + 101);
+  const lockedBg = roleLocks.bg ? SP.hexToRgb(cand.bg) : null;
+  const hue = lockedBg ? SP.rgbToHsl(lockedBg)[0] : undefined;
+  const m = lockedBg ? (SP.relLum(lockedBg) > 0.5 ? "light" : SP.relLum(lockedBg) < 0.08 ? "dark" : "bold") : mode;
+  const p = Looks.makePalette(rnd, m, hue);
+  const g = lockedBg || SP.hexToRgb(p.bg), dark = SP.relLum(g) < 0.25;
+  if (!roleLocks.bg) cand.bg = p.bg;
+  if (!roleLocks.ink) cand.ink = SP.rgbToHex(SP.hslToRgb(pushL(SP.rgbToHsl(SP.hexToRgb(p.ink)), g, O.minC / 10, dark)));
+  if (!roleLocks.accent) cand.accent = SP.rgbToHex(SP.hslToRgb(pushL(SP.rgbToHsl(SP.hexToRgb(p.accent)), g, 3, dark)));
+  cand.name = "Rolled"; $("rollSeed").textContent = seed; reflect(); queueRender();
+}
+$("rollRow").addEventListener("click", e => { const b = e.target.closest("[data-mode]"); if (!b) return; lastMode = b.dataset.mode; roll(lastMode, ++rollSeed); });
+$("rollBack").addEventListener("click", () => { if (rollSeed > 1) roll(lastMode, --rollSeed); });
+[["bg", "Keep ground"], ["ink", "Keep ink"], ["accent", "Keep spot"]].forEach(([k, l]) => {
+  const b = document.createElement("button"); b.type = "button"; b.className = "chip-b"; b.textContent = l; b.setAttribute("aria-pressed", "false");
+  b.addEventListener("click", () => { roleLocks[k] = !roleLocks[k]; b.setAttribute("aria-pressed", String(roleLocks[k])); });
+  $("roleLocks").appendChild(b);
+});
+/* Other sensible assignments of the same colours: inverted, and each remaining swatch as the spot. */
+function alternatives() {
+  const out = [], seen = new Set(), g = SP.hexToRgb(cand.bg);
+  const add = (p, label) => { const key = p.bg + p.ink + p.accent; if (seen.has(key) || key === cand.bg + cand.ink + cand.accent) return; seen.add(key); out.push({ ...p, label }); };
+  const inv = SP.contrast(SP.hexToRgb(cand.accent), SP.hexToRgb(cand.ink)) >= 3 ? cand.accent : cand.bg;
+  add({ bg: cand.ink, ink: cand.bg, accent: inv }, "Inverted");
+  swatches.forEach(s => {
+    if (s.hex === cand.bg || s.hex === cand.ink) return;
+    const dark = SP.relLum(g) < 0.25;
+    const a = SP.rgbToHex(SP.hslToRgb(pushL(SP.rgbToHsl(s.rgb), g, 3, dark)));
+    add({ bg: cand.bg, ink: cand.ink, accent: a }, "Spot");
+  });
+  return out.slice(0, 8);
+}
+function renderAlts() {
+  const host = $("alts"); host.innerHTML = "";
+  alternatives().forEach(p => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "preset";
+    b.innerHTML = `<span class="chip" style="background:${p.bg}"><b style="background:${p.accent}"></b><i style="background:${p.ink}"></i></span>${p.label}`;
+    b.addEventListener("click", () => { cand.bg = p.bg; cand.ink = p.ink; cand.accent = p.accent; reflect(); queueRender(); });
+    host.appendChild(b);
+  });
+  if (!host.children.length) host.innerHTML = '<span class="hint">Pull swatches from an image to see alternatives.</span>';
+}
+
 $("apply").addEventListener("click", () => {
-  SP.patch("palette", { bg: cand.bg, ink: cand.ink, accent: cand.accent, name: cand.name && SP.PRESETS.some(p => p.name === cand.name && p.bg === cand.bg) ? cand.name : (O.source === "image" ? "From image" : "From colour"),
+  SP.patch("palette", { bg: cand.bg, ink: cand.ink, accent: cand.accent, name: cand.name && (cand.name === "Rolled" || Looks.PALETTES.some(p => p.name === cand.name && p.bg === cand.bg)) ? cand.name : (O.source === "image" ? "From image" : "From colour"),
     swatches: swatches.map(s => s.hex), words: describe(cand) });
   SP.toast("Palette applied to the release"); reflect();
 });

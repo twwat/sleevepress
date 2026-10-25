@@ -60,7 +60,13 @@
           <label class="check"><input type="checkbox" id="rules"> Row rules</label>
         </div>
         <label class="f"><span>Type size <output id="scaleOut"></output></span><input type="range" id="scale" min="70" max="130" step="1"></label>
-        <p class="hint">Face, colours, grain, vignette, frame and barcode come from <a href="sleeve-press.html">the front sleeve</a>, so the pair never drifts.</p>
+        <div class="seg" id="trackCase" role="group" aria-label="Track title case">
+          <button type="button" data-v="upper">UPPER</button>
+          <button type="button" data-v="title">Title Case</button>
+          <button type="button" data-v="asis">As typed</button>
+        </div>
+        <label class="check"><input type="checkbox" id="backdrop"> Carry the front's wash and texture (quieter)</label>
+        <p class="hint">Faces, colours, margin, grain, vignette, border and barcode come from <a href="sleeve-press.html">the front sleeve</a>, so the pair never drifts.</p>
       </div>
     </details>
 
@@ -107,6 +113,7 @@
 </main>
 
 <script src="shared/press.js"></script>
+<script src="shared/looks.js"></script>
 <script src="shared/sleeve-render.js"></script>
 <script src="shared/tracklist-render.js"></script>
 <script>
@@ -134,9 +141,9 @@ $("demo").addEventListener("click", () => { $("trackText").value = SP.DEMO_TRACK
 $("clear").addEventListener("click", () => { $("trackText").value = ""; setTracksFromText(); showTracks(true); reflect(); });
 
 /* ---------- settings ---------- */
-const CHECKS = ["showFeat", "showBpm", "showKey", "showLength", "showRuntime", "rules", "copyright", "ghost"];
+const CHECKS = ["showFeat", "showBpm", "showKey", "showLength", "showRuntime", "rules", "copyright", "ghost", "backdrop"];
 const RANGES = { scale: "%", ghostDim: "%" };
-const SEGS = ["layout", "numbering", "exportSize", "textFormat"];
+const SEGS = ["layout", "numbering", "exportSize", "textFormat", "trackCase"];
 const segRefresh = {};
 function put(k, v) { writing = true; SP.patch("typeset", { [k]: v }); writing = false; reflect(); queueRender(); }
 function reflect() {

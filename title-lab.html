@@ -45,7 +45,7 @@
 
     <section class="panel" aria-label="Candidates">
       <h2>Candidates
-        <span class="seedbar"><button type="button" class="btn small" id="prev" aria-label="Previous seed">←</button>
+        <span class="seedbar"><button type="button" class="btn small" id="surprise">Surprise</button><button type="button" class="btn small" id="prev" aria-label="Previous seed">←</button>
           seed <b id="seedOut"></b>
           <button type="button" class="btn small" id="next" aria-label="Next seed">→</button>
           <button type="button" class="btn small primary" id="roll">Roll new</button></span>
@@ -115,11 +115,16 @@ const THEMES = {
   desert: { label: "Desert", n: W("dune mirage canyon salt-flat cactus ember caravan ridge dust well horizon scorpion kiln wind bone ochre cairn mesa glare"), a: W("dry bare burnt pale wide still hot red cracked endless"), g: W("wandering baking drifting burning crossing"), p: W("the_Flats the_Wash the_Mesa the_Pass the_Salt_Road") },
   cosmic: { label: "Cosmic", n: W("orbit comet eclipse nebula aurora meridian zenith satellite static horizon pulsar signal probe vector lens tide halo flare void quasar apogee"), a: W("distant silent cold bright slow deep fixed binary lunar pale"), g: W("orbiting drifting dimming rising transmitting"), p: W("the_Outer_Ring the_Dark_Side the_Far_Field the_Terminator") },
   ritual: { label: "Ritual", n: W("altar vigil ember censer psalm veil offering pilgrim chapel candle bell oath relic salt ash threshold wake bread incense basin"), a: W("holy hushed ninth last sacred bare slow solemn burnt faithful"), g: W("keeping kneeling lighting gathering tending"), p: W("the_Threshold the_Chapel the_Gate the_Longest_Night") },
+  weather: { label: "Weather", n: W("rain thunder drizzle squall monsoon fog frost heatwave hail drought gale rainbow puddle cloudburst barometer forecast front lightning"), a: W("wet grey heavy humid cold bright overcast still electric low"), g: W("raining clearing gathering breaking thawing"), p: W("the_Coast the_Lowlands the_Front_Line the_Eye_of_the_Storm") },
+  gothic: { label: "Gothic", n: W("crypt raven lantern velvet thorn mirror candle chapel bell ghost veil wolf moth ivy portrait tomb hymn widow key"), a: W("black velvet hollow pale cold ancient silent crimson bitter dim"), g: W("haunting weeping fading kneeling burning"), p: W("the_Manor the_Moor the_Vault the_Old_House the_Graveyard") },
+  tropic: { label: "Tropics", n: W("palm mango hibiscus lagoon coconut breeze hammock reef parrot sugarcane monsoon rum veranda sunset tide calypso"), a: W("sweet hot slow golden lazy salt green bright warm wild"), g: W("swaying drifting dancing ripening basking"), p: W("the_Island the_Bay the_Lagoon the_Cane_Field the_Beach_Road") },
+  digital: { label: "Digital", n: W("signal pixel cache static cursor modem server glitch packet loop byte pulse terminal checksum firmware render ping"), a: W("dead low null soft lost blue silent analog bright broken"), g: W("loading buffering scanning looping rendering"), p: W("the_Network the_Mainframe the_Dark_Web the_Grid Sector_7") },
+  street: { label: "Street", n: W("corner hustle sneaker blockparty boombox curb stoop chain mural cypher tag lamp-post bodega rooftop") , a: W("raw fresh heavy cold real loud late hard"), g: W("rolling cruising posting spitting"), p: W("the_Block the_Avenue the_Estate the_Corner_Shop South_Side") },
   tender: { label: "Lovers", n: W("honey ribbon letter promise postcard cassette kiss slow-dance telephone summer lace perfume sunday rose silk window ring"), a: W("sweet soft slow warm tender golden sleepy gentle late lazy"), g: W("holding dancing waiting whispering borrowing"), p: W("your_Place the_Back_Porch the_Corner_Shop the_Last_Dance") },
 };
 const COMMON_A = W("last long low late quiet blue open hollow pale bare");
 const NUMBERS = W("One Two Three Four Five Seven Nine Ninth Twelve Thirteen Forty");
-const STOP = new Set(["the", "of", "and", "&", "no", "for", "at", "after", "under", "to", "a", "my", "your", "in", "on", "dear", "return", "last", "season", "hours", "version"]);
+const STOP = new Set(["the", "of", "and", "&", "no", "for", "at", "after", "under", "to", "a", "my", "your", "in", "on", "dear", "return", "last", "season", "hours", "version", "songs", "club", "theory", "notes", "dub", "/"]);
 
 const TEMPLATES = [
   ["{N}", "One word"], ["{A} {N}", "Adjective noun"], ["{N} {N2}", "Compound"], ["The {N} of {P}", "The … of …"],
@@ -127,6 +132,8 @@ const TEMPLATES = [
   ["After {N}", "After …"], ["{A} {A2} {N}", "Two adjectives"], ["{N} for {N2}", "… for …"], ["{P}", "Place"],
   ["Last {N}", "Last …"], ["{NUM} {N}s", "Number + plural"], ["{N} at {P}", "… at …"], ["Under {N}", "Under …"],
   ["Return to {P}", "Return to …"], ["{N} Hours", "… Hours"], ["Dear {N}", "Dear …"], ["{N} Version", "… Version"],
+  ["{N} / {N2}", "… / …"], ["Songs for {N}", "Songs for …"], ["{A} {N} Club", "… Club"], ["{N} Theory", "… Theory"],
+  ["{N} in {P}", "… in …"], ["Notes on {N}", "Notes on …"], ["{N} (Dub)", "… (Dub)"], ["{G}", "Gerund alone"],
 ];
 
 /* ---------- helpers ---------- */
@@ -150,9 +157,12 @@ function casing(t, mode) {
 const OPT = { themes: ["yard", "ritual"], tpls: TEMPLATES.map(t => t[0]), mine: "", learn: true, words: 3, syl: 7, chars: 24, count: 24, starts: "", alliter: false, fresh: true, casing: "title" };
 const saved = SP.get().names;
 Object.assign(OPT, saved.opts || {});
+// Templates added after a list was saved start switched on.
+if ((OPT.tplsVersion || 1) < 2) { const known = new Set(TEMPLATES.slice(0, 20).map(t => t[0])); OPT.tpls = [...OPT.tpls, ...TEMPLATES.map(t => t[0]).filter(k => !known.has(k) && !OPT.tpls.includes(k))]; OPT.tplsVersion = 2; }
 let seed = saved.seed || 1;
 let shortlist = Array.isArray(saved.shortlist) ? [...saved.shortlist] : [];
 let list = [];
+let riffOn = null;     // when set, every candidate must reuse a word from this title
 
 function save() { SP.patch("names", { shortlist, seed, opts: OPT }); }
 
@@ -162,6 +172,7 @@ function pools() {
   OPT.themes.forEach(k => { const t = THEMES[k]; if (!t) return; P.n.push(...t.n); P.a.push(...t.a); P.g.push(...t.g); P.p.push(...t.p); });
   const mine = OPT.mine.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
   mine.forEach(w => { for (let i = 0; i < 3; i++) P.n.push(w); P.a.push(w); });
+  if (riffOn) content(riffOn).forEach(w => { for (let i = 0; i < 8; i++) { P.n.push(w); P.a.push(w); } });
   if (OPT.learn && shortlist.length) {
     const learned = new Set(); shortlist.forEach(t => content(t).forEach(w => learned.add(w)));
     learned.forEach(w => { for (let i = 0; i < 2; i++) { P.n.push(w); P.a.push(w); } });
@@ -191,7 +202,8 @@ function generate() {
     if (starts && t[0].toLowerCase() !== starts) continue;
     if (OPT.alliter) { if (cw.length < 2 || !cw.every(x => x[0] === cw[0][0])) continue; }
     const key = t.toLowerCase(); if (seen.has(key)) continue;
-    if (OPT.fresh && cw.some(x => used.has(x))) continue;
+    if (riffOn) { const rw = content(riffOn); if (!cw.some(x => rw.includes(x)) || key === riffOn.toLowerCase()) continue; }
+    if (OPT.fresh && !riffOn && cw.some(x => used.has(x))) continue;
     seen.add(key); cw.forEach(x => used.add(x)); out.push({ text: casing(t, OPT.casing), syl, n: ws.length });
   }
   return out;
@@ -227,7 +239,9 @@ function render() {
     a.prepend(star); a.append(m);
     el.append(t, a); g.appendChild(el);
   });
-  $("note").textContent = list.length < OPT.count ? `Only ${list.length} names fit these filters. Loosen the word, syllable or character limits, or switch on more themes and templates.` : "";
+  $("note").innerHTML = "";
+  if (riffOn) { $("note").innerHTML = `Riffs on <b></b>. <button type="button" class="btn small" id="riffOff">Back to the full list</button>`; $("note").querySelector("b").textContent = riffOn; $("riffOff").addEventListener("click", () => { riffOn = null; roll(seed); }); }
+  else $("note").textContent = list.length < OPT.count ? `Only ${list.length} names fit these filters. Loosen the word, syllable or character limits, or switch on more themes and templates.` : "";
   const s = $("short"); s.innerHTML = "";
   $("shortCount").textContent = shortlist.length ? `${shortlist.length}` : "";
   if (!shortlist.length) { const p = document.createElement("p"); p.className = "empty"; p.textContent = "Star a name to keep it here. The shortlist is saved with the release."; s.appendChild(p); }
@@ -235,7 +249,10 @@ function render() {
     const it = document.createElement("div"); it.className = "it";
     const t = document.createElement("span"); t.className = "t"; t.textContent = text;
     const rm = document.createElement("button"); rm.type = "button"; rm.className = "star"; rm.textContent = "×"; rm.setAttribute("aria-label", `Remove ${text}`); rm.addEventListener("click", () => toggle(text));
-    it.append(t, actions(text), rm); s.appendChild(it);
+    const riff = document.createElement("button"); riff.type = "button"; riff.className = "btn small"; riff.textContent = "Riff"; riff.title = "More names that reuse its words";
+    riff.addEventListener("click", () => { riffOn = text; roll(seed); $("grid").scrollIntoView({ behavior: "smooth", block: "start" }); });
+    const acts = actions(text); acts.prepend(riff);
+    it.append(t, acts, rm); s.appendChild(it);
   });
 }
 function toggle(text) { shortlist = shortlist.includes(text) ? shortlist.filter(x => x !== text) : [...shortlist, text]; save(); render(); }
@@ -270,6 +287,12 @@ $("mine").addEventListener("input", SP.debounce(e => { OPT.mine = e.target.value
 $("starts").addEventListener("input", e => { OPT.starts = e.target.value.replace(/[^a-z]/gi, ""); roll(seed); });
 const segCase = SP.bindSeg($("casing"), () => OPT.casing, v => { OPT.casing = v; roll(seed); });
 $("roll").addEventListener("click", () => roll(seed + 1));
+$("surprise").addEventListener("click", () => {
+  const keys = Object.keys(THEMES), r = SP.mulberry32(seed * 31 + 7), a = keys[Math.floor(r() * keys.length)];
+  let b = keys[Math.floor(r() * keys.length)]; if (b === a) b = keys[(keys.indexOf(a) + 3) % keys.length];
+  OPT.themes = [a, b]; riffOn = null; reflect(); roll(seed + 1);
+  SP.toast(`Themes: ${THEMES[a].label} + ${THEMES[b].label}`);
+});
 $("next").addEventListener("click", () => roll(seed + 1));
 $("prev").addEventListener("click", () => roll(Math.max(1, seed - 1)));
 $("shortClear").addEventListener("click", () => { shortlist = []; save(); render(); });

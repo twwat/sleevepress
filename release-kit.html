@@ -23,6 +23,8 @@
 .s button { background: none; border: 0; color: var(--chalk-faint); text-decoration: underline; padding: 0; font: inherit; text-align: left; }
 .stepbar { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 11px var(--f-mono); color: var(--chalk-faint); }
 .stepbar a { color: var(--chalk-dim); }
+#which { display: flex; flex-wrap: wrap; }
+#which button { flex: 1 1 auto; border-bottom: 1px solid var(--rule-strong); }
 </style>
 </head>
 <body>
@@ -40,6 +42,9 @@
       <button type="button" data-v="back">Back</button>
       <button type="button" data-v="banner">Banner</button>
       <button type="button" data-v="social">Social</button>
+      <button type="button" data-v="youtube">YouTube</button>
+      <button type="button" data-v="story">Story</button>
+      <button type="button" data-v="label">Label</button>
       <button type="button" data-v="series">Series</button>
     </div>
     <div class="pre"><canvas id="preview" width="1000" height="1000" aria-label="Output preview"></canvas></div>
@@ -84,6 +89,7 @@
 </main>
 
 <script src="shared/press.js"></script>
+<script src="shared/looks.js"></script>
 <script src="shared/sleeve-render.js"></script>
 <script src="shared/tracklist-render.js"></script>
 <script>
@@ -103,13 +109,20 @@ async function cover(size) { const c = mk(size, size); await SR.render(c, state(
 async function back(size) { const [w, h] = TR.dims(TR.settings(SP.get()).layout, size); const c = mk(w, h); await TR.render(c, SP.get(), image); return c; }
 function fit(ctx, text, maxW, size, track) { const w = SR.measureTracked(ctx, text, track, size); return w > maxW ? size * maxW / w : size; }
 
-async function banner(W = 1500, H = 500) {
+async function banner(W = 1500, H = 500, blurBack = false) {
   const st = state(), c = mk(W, H), ctx = c.getContext("2d");
-  await SR.loadFont(st.font);
+  await SR.loadFonts(st);
   const bg = rgb(st.bg), ink = rgb(st.ink), spot = rgb(st.accent), face = SR.faceStack(st.font), wt = (w) => SR.weightFor(st.font, w);
   ctx.fillStyle = SP.rgba(bg, 1); ctx.fillRect(0, 0, W, H);
-  const pad = H * 0.1, cs = H - pad * 2;
-  ctx.drawImage(await cover(Math.round(cs * 2)), pad, pad, cs, cs);
+  const pad = H * 0.1, cs = H - pad * 2, cov = await cover(Math.round(cs * 2));
+  if (blurBack) {
+    ctx.save(); if ("filter" in ctx) ctx.filter = `blur(${Math.round(H * 0.05)}px)`;
+    ctx.drawImage(cov, -W * 0.05, (H - W * 1.1) / 2, W * 1.1, W * 1.1); ctx.restore();
+    ctx.fillStyle = SP.rgba(bg, 0.72); ctx.fillRect(0, 0, W, H);
+    ctx.save(); ctx.shadowColor = "rgba(0,0,0,.55)"; ctx.shadowBlur = H * 0.06; ctx.shadowOffsetY = H * 0.02;
+    ctx.fillStyle = SP.rgba(bg, 1); ctx.fillRect(pad, pad, cs, cs); ctx.restore();
+  }
+  ctx.drawImage(cov, pad, pad, cs, cs);
   SR.applyVignette(ctx, W, H, st, bg, ink);
   const x = pad * 2 + cs, maxW = W - x - pad * 1.6;
   ctx.textBaseline = "alphabetic"; ctx.fillStyle = SP.rgba(ink, 1);
@@ -127,13 +140,15 @@ async function banner(W = 1500, H = 500) {
   SR.applyGrain(ctx, W, H, st.grain, H * 0.5);
   return c;
 }
-async function social(W = 1080, H = 1350) {
+async function social(W = 1080, H = 1350, inset = 0) {
   const st = state(), c = mk(W, H), ctx = c.getContext("2d");
-  await SR.loadFont(st.font);
+  await SR.loadFonts(st);
   const bg = rgb(st.bg), ink = rgb(st.ink), spot = rgb(st.accent), face = SR.faceStack(st.font), wt = (w) => SR.weightFor(st.font, w);
   ctx.fillStyle = SP.rgba(bg, 1); ctx.fillRect(0, 0, W, H);
-  ctx.drawImage(await cover(W * 2), 0, 0, W, W);
-  const bandTop = W, bandH = H - W, X = W * 0.075, maxW = W - X * 2;
+  const cw = W * (1 - inset * 2), cy = inset ? H * 0.14 : 0;
+  if (inset) SR.drawBackdrop(ctx, W, H, st, bg, ink, spot, 0.6);
+  ctx.drawImage(await cover(Math.round(cw * 2)), W * inset, cy, cw, cw);
+  const bandTop = cy + cw, bandH = Math.min(H - bandTop, W * 0.32), X = W * 0.075, maxW = W - X * 2;
   ctx.textBaseline = "alphabetic";
   let as = W * 0.026; ctx.font = `${wt("700")} ${as}px ${face}`; as = fit(ctx, st.artist.toUpperCase(), maxW, as, 0.32);
   ctx.font = `${wt("700")} ${as}px ${face}`; ctx.fillStyle = SP.rgba(ink, 1); SR.drawTracked(ctx, st.artist.toUpperCase(), X, bandTop + bandH * 0.3, 0.32, as);
@@ -146,6 +161,46 @@ async function social(W = 1080, H = 1350) {
   SR.applyGrain(ctx, W, H, st.grain * 0.8, W);
   return c;
 }
+
+/* ---------- vinyl centre label: one per side, transparent outside the circle ---------- */
+async function label(side = "A", D = 1500) {
+  const st = state(), d = SP.get(), c = mk(D, D), ctx = c.getContext("2d");
+  await SR.loadFonts(st);
+  const bg = rgb(st.bg), ink = rgb(st.ink), spot = rgb(st.accent);
+  const face = SR.faceStack(st.font), bfn = st.bodyFont || st.font, bface = SR.faceStack(bfn);
+  const r = D / 2, cx = r, cy = r;
+  ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+  ctx.fillStyle = SP.rgba(bg, 1); ctx.fillRect(0, 0, D, D);
+  SR.drawBackdrop(ctx, D, D, { ...st, shape: "none" }, bg, ink, spot, 0.7);
+  ctx.strokeStyle = SP.rgba(ink, 0.22); ctx.lineWidth = D * 0.003; ctx.beginPath(); ctx.arc(cx, cy, r * 0.93, 0, Math.PI * 2); ctx.stroke();
+  const center = (txt, y, size, font, weight, track, alpha = 1, col = ink, maxW = D * 0.62) => {
+    ctx.font = `${SR.weightFor(font, weight)} ${size}px ${SR.faceStack(font)}`;
+    let w = SR.measureTracked(ctx, txt, track, size);
+    if (w > maxW) { size *= maxW / w; ctx.font = `${SR.weightFor(font, weight)} ${size}px ${SR.faceStack(font)}`; w = SR.measureTracked(ctx, txt, track, size); }
+    ctx.fillStyle = SP.rgba(col, alpha); SR.drawTracked(ctx, txt, cx - w / 2, y, track, size);
+  };
+  ctx.textBaseline = "alphabetic";
+  center(st.artist.toUpperCase(), D * 0.25, D * 0.034, bfn, "700", 0.3, 1, ink, D * 0.5);
+  center(SR.applyCase(st.title.split("\n").map(x => x.trim()).filter(Boolean).join(" "), st.titleCase), D * 0.34, D * 0.07, st.font, "700", -0.01, 1, ink, D * 0.66);
+  center(`SIDE ${side}`, cy + D * 0.1, D * 0.04, st.font, "700", 0.1, 1, spot, D * 0.2);
+  ctx.font = `${SR.weightFor(bfn, "600")} ${D * 0.02}px ${bface}`; ctx.fillStyle = SP.rgba(ink, 0.6);
+  const rpm = d.release.format === "Single" ? "45 RPM" : "33⅓ RPM", rw = SR.measureTracked(ctx, rpm, 0.2, D * 0.02);
+  SR.drawTracked(ctx, rpm, cx - D * 0.2 - rw / 2, cy + D * 0.007, 0.2, D * 0.02);
+  const cat = (st.catalog || "").toUpperCase(), cw2 = SR.measureTracked(ctx, cat, 0.2, D * 0.02);
+  SR.drawTracked(ctx, cat, cx + D * 0.2 - cw2 / 2, cy + D * 0.007, 0.2, D * 0.02);
+  const groups = TR.sidesOf(d.tracks, "sides"), g = groups.find(x => x.side === side);
+  const rows = g ? g.rows : [];
+  const ls = Math.min(D * 0.022, (D * 0.17) / Math.max(1, rows.length));
+  rows.forEach(({ t }, i) => center(`${side}${i + 1}  ${t.title.toUpperCase()}${t.length ? "  " + t.length : ""}`, cy + D * 0.17 + i * ls * 1.5, ls, bfn, "600", 0.08, 0.85, ink, D * 0.56));
+  const foot = [st.year.trim() ? `℗ ${st.year.trim()} ${st.artist}` : st.artist, "ALL RIGHTS RESERVED"].join("  ·  ").toUpperCase();
+  center(foot, D * 0.86, D * 0.014, bfn, "600", 0.18, 0.5, ink, D * 0.5);
+  SR.applyGrain(ctx, D, D, st.grain * 0.7, D);
+  ctx.restore();
+  // spindle hole (7.24 mm on a 100 mm label)
+  ctx.save(); ctx.globalCompositeOperation = "destination-out"; ctx.beginPath(); ctx.arc(cx, cy, D * 0.0362, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  return c;
+}
+const labelSides = () => { const g = TR.sidesOf(SP.get().tracks, "sides").map(x => x.side); return g.length ? g : ["A", "B"]; };
 
 /* ---------- series ---------- */
 const thumbs = new Map();
@@ -198,6 +253,9 @@ const OUTS = [
   { id: "back3000", label: "Back sleeve", sub: "from Tracklist, 3000 px", file: () => SR.filename(state(), 3000, "back"), make: async () => SP.canvasBlob(await back(3000)), on: true, needs: "tracks" },
   { id: "banner", label: "Banner 1500×500", sub: "3:1 PNG", file: () => SR.filename(state(), "1500x500", "banner"), make: async () => SP.canvasBlob(await banner()), on: true },
   { id: "social", label: "Social 1080×1350", sub: "4:5 PNG", file: () => SR.filename(state(), "1080x1350", "social"), make: async () => SP.canvasBlob(await social()), on: true },
+  { id: "youtube", label: "YouTube 1280×720", sub: "16:9 PNG, blurred cover behind", file: () => SR.filename(state(), "1280x720", "youtube"), make: async () => SP.canvasBlob(await banner(1280, 720, true)), on: true },
+  { id: "story", label: "Story 1080×1920", sub: "9:16 PNG", file: () => SR.filename(state(), "1080x1920", "story"), make: async () => SP.canvasBlob(await social(1080, 1920, 0.08)), on: true },
+  { id: "labels", label: "Vinyl centre labels", sub: "one PNG per side, transparent, with spindle hole", multiAsync: async () => { const out = []; for (const sd of labelSides()) out.push([SR.filename(state(), 1500, "label" + sd), await SP.canvasBlob(await label(sd))]); return out; }, on: false },
   { id: "series", label: "Series strip", sub: "PNG, from the series list", file: () => `${cat()}_series.png`, make: async () => SP.canvasBlob(await seriesStrip()), on: false },
   { id: "tracklist", label: "Tracklist", sub: "plain text and markdown", multi: true, files: () => [[`${cat()}_tracklist.txt`, TR.toText(SP.get(), "plain")], [`${cat()}_tracklist.md`, TR.toText(SP.get(), "md")], [`${cat()}_tracklist.csv`, TR.toText(SP.get(), "csv")]], on: true, needs: "tracks" },
   { id: "style", label: "Suno prompts", sub: "style, exclude, structure, per track", file: () => `${cat()}_suno_prompts.txt`, text: styleText, on: true },
@@ -219,7 +277,8 @@ function renderList() {
     b.addEventListener("click", async () => {
       b.disabled = true;
       try {
-        if (o.multi) { for (const [name, txt] of o.files()) SP.download(txt, name, "text/plain"); }
+        if (o.multiAsync) { for (const [name, blob] of await o.multiAsync()) SP.download(blob, name); }
+        else if (o.multi) { for (const [name, txt] of o.files()) SP.download(txt, name, "text/plain"); }
         else SP.download(await blobOf(o), o.file());
       } catch (e) { console.error(e); SP.toast("Couldn't build that file."); }
       b.disabled = false;
@@ -258,7 +317,8 @@ $("zipBtn").addEventListener("click", async () => {
     for (let i = 0; i < sel.length; i++) {
       const o = sel[i]; btn.textContent = `Building ${i + 1} / ${sel.length}…`; $("zipHint").textContent = o.label;
       await new Promise(r => setTimeout(r, 20));
-      if (o.multi) { for (const [name, txt] of o.files()) { files.push({ name, data: new TextEncoder().encode(txt) }); made.push(name); } }
+      if (o.multiAsync) { for (const [name, blob] of await o.multiAsync()) { files.push({ name, data: new Uint8Array(await blob.arrayBuffer()) }); made.push(name); } }
+      else if (o.multi) { for (const [name, txt] of o.files()) { files.push({ name, data: new TextEncoder().encode(txt) }); made.push(name); } }
       else { const b = await blobOf(o); files.push({ name: o.file(), data: new Uint8Array(await b.arrayBuffer()) }); made.push(o.file()); }
     }
     const r = SP.get().release, p = SP.get().palette;
@@ -296,6 +356,9 @@ const queue = SP.rafOnce(async () => {
     else if (which === "back") { src = await back(1000); name = SR.filename(state(), 3000, "back"); }
     else if (which === "banner") { src = await banner(); name = SR.filename(state(), "1500x500", "banner"); }
     else if (which === "social") { src = await social(); name = SR.filename(state(), "1080x1350", "social"); }
+    else if (which === "youtube") { src = await banner(1280, 720, true); name = SR.filename(state(), "1280x720", "youtube"); }
+    else if (which === "story") { src = await social(1080, 1920, 0.08); name = SR.filename(state(), "1080x1920", "story"); }
+    else if (which === "label") { src = mk(1000, 1000); const l = await label(labelSides()[0], 1000), x = src.getContext("2d"); x.fillStyle = "#16140f"; x.fillRect(0, 0, 1000, 1000); x.drawImage(l, 0, 0); name = SR.filename(state(), 1500, "labelA"); }
     else { src = await seriesStrip(1600); name = `${cat()}_series.png`; }
     pv.width = src.width; pv.height = src.height; pv.getContext("2d").drawImage(src, 0, 0);
     $("dimOut").textContent = `${src.width}×${src.height} preview`; $("fileOut").textContent = name;

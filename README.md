@@ -7,12 +7,12 @@ Plain HTML, CSS and JavaScript. No build step, no dependencies. Open `index.html
 | Page | What it does |
 |---|---|
 | `index.html` | **Release Desk.** Basics for the current release, import/export, "next release, keep the look". |
-| `title-lab.html` | **Title Lab.** Release and track names from theme word banks, templates and filters (length, syllables, alliteration). Seeded; star names to teach the next batch. |
-| `palette-pull.html` | **Palette Pull.** Ground / ink / spot from the cover (seeded k-means) or from one colour, with contrast checks and a plain-language colour description. |
-| `sleeve-press.html` | **Sleeve Press.** The front sleeve: motif, type, image toning, catalogue plate, EAN-13 barcode. |
-| `tracklist.html` | **Tracklist Typesetter.** Back sleeve in the same type system: single column, A/B sides, or a 4:5 card. Text/Markdown/CSV export. |
-| `style-forge.html` | **Style Forge.** Suno style prompts from toggles. Locks, seeded shuffle, trim to your character limit, exclude list, structure tags, per-track prompts using each track's BPM and key. |
-| `release-kit.html` | **Release Kit.** Cover sizes, back sleeve, banner, social tile, series strip, text files and `release.json`, zipped by catalogue number. Preflight checklist. |
+| `title-lab.html` | **Title Lab.** Release and track names from 14 theme word banks, 28 templates and filters (length, syllables, alliteration). Seeded; star names to teach the next batch, **Riff** on a starred name, or **Surprise** for two random themes. |
+| `palette-pull.html` | **Palette Pull.** Ground / ink / spot from the cover (seeded k-means), from one colour, from a 36-palette library, or rolled (dark / light / bold) with per-role locks. Every roll clears 7:1 ink and 3:1 spot contrast. Alternatives from the same swatches, plus a plain-language colour description. |
+| `sleeve-press.html` | **Sleeve Press.** The front sleeve. Seeded **Shuffle look** with group locks (colours, type, layout, motif, border, backdrop), a 12-variant gallery, undo, layout presets and saved looks. 20 faces (separate title and body face), free positioning, 8 border styles, 8 motif kinds, wash / big shape / texture layers, image blur, contrast and posterize, catalogue plate, EAN-13 barcode. |
+| `tracklist.html` | **Tracklist Typesetter.** Back sleeve in the same type system, border and backdrop: single column, A/B sides, or a 4:5 card. Text/Markdown/CSV export. |
+| `style-forge.html` | **Style Forge.** Suno style prompts from toggles across 38 genres. Locks, seeded shuffle, energy, trim to your character limit, exclude list, structure tags, a saved prompt bank, and per-track prompts using each track's BPM and key, with optional per-track variety. |
+| `release-kit.html` | **Release Kit.** Cover sizes, back sleeve, banner, social tile, YouTube 16:9, story 9:16, vinyl centre labels per side, series strip, text files and `release.json`, zipped by catalogue number. Preflight checklist. |
 
 ## How the tools connect
 
@@ -44,6 +44,7 @@ Cover image ── shared by Palette Pull, Sleeve, Tracklist (ghost), Kit
   "style":   { "form": { /* Style Forge state */ }, "prompt": "", "exclude": "", "structure": "", "batch": [] },
   "names":   { "shortlist": [], "seed": 1, "opts": {} },
   "kit":     { "series": [], "sizes": null },
+  "looks":   [ { "name": "", "look": { /* sleeve settings + bg/ink/accent */ } } ],
   "image":   { "dataUrl": "data:image/jpeg;base64,…", "name": "", "w": 0, "h": 0 }   // export only
 }
 ```
@@ -57,7 +58,8 @@ index.html, title-lab.html, palette-pull.html, sleeve-press.html,
 tracklist.html, style-forge.html, release-kit.html
 shared/press.css            house style
 shared/press.js             release store, cover image, import/export, nav, helpers, track parser
-shared/sleeve-render.js     front-sleeve renderer (used by Sleeve, Tracklist, Kit)
+shared/looks.js             palette library, font table, layout presets, palette roller, look randomizer
+shared/sleeve-render.js     front-sleeve renderer, border and backdrop layers (used by every page that draws)
 shared/tracklist-render.js  back-sleeve renderer and text exports (used by Tracklist, Kit)
 ```
 

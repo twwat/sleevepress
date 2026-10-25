@@ -4,8 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Sleeve Press</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter+Tight:wght@600;800&family=Barlow+Condensed:wght@600;700&family=Oswald:wght@500;700&family=DM+Serif+Display&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="shared/press.css">
+<style>
+.shuffle { display: grid; gap: 10px; }
+.seedline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.seedline .mini { font: 12px var(--f-mono); color: var(--chalk-dim); padding: 0 4px; }
+.presets.scroll { max-height: 168px; overflow: auto; padding-right: 4px; }
+.gallery { padding-top: 28px; display: grid; gap: 12px; }
+.gallery-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gallery-head h2 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
+.ggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.gcell { background: none; border: 1px solid var(--rule); padding: 0; display: grid; text-align: left; color: var(--chalk-faint); }
+.gcell:hover { border-color: var(--chalk-faint); }
+.gcell canvas { width: 100%; height: auto; display: block; aspect-ratio: 1; background: #000; }
+.gcell span { font: 11px var(--f-mono); padding: 5px 7px; display: flex; justify-content: space-between; }
+.saved { display: flex; flex-wrap: wrap; gap: 6px; }
+.saved .it { display: inline-flex; align-items: center; border: 1px solid var(--rule-strong); background: var(--room); }
+.saved .it button { background: none; border: 0; color: var(--chalk-dim); font-size: 12px; padding: 5px 8px; display: inline-flex; gap: 6px; align-items: center; }
+.saved .it button:first-child:hover { color: var(--chalk); }
+.saved .it i { display: inline-block; width: 12px; height: 12px; border: 1px solid rgba(255,255,255,.15); }
+.saved .it .x { border-left: 1px solid var(--rule-strong); color: var(--chalk-faint); }
+</style>
 </head>
 <body>
 <div id="sp-nav"></div>
@@ -19,248 +39,379 @@
     </div>
   </section>
 
-  <aside class="ticket" aria-label="Sleeve settings">
-
+  <aside class="ticket" aria-label="Sleeve settings" id="ticket">
     <details open>
-      <summary>Release</summary>
-      <div class="fields">
-        <label class="f"><span>Artist</span><input type="text" id="artist"></label>
-        <label class="f"><span>Title <output>one line per row</output></span><textarea class="up" id="title" rows="2"></textarea></label>
-        <label class="f"><span>Footer line</span><input type="text" id="footer"></label>
-        <div class="row">
-          <label class="f"><span>Catalogue no.</span><input type="text" id="catalog"></label>
-          <label class="f"><span>Edition / year</span><input type="text" id="year"></label>
+      <summary>Look</summary>
+      <div class="fields shuffle">
+        <div class="seedline">
+          <button type="button" class="btn primary" id="shuffle">Shuffle look</button>
+          <button type="button" class="btn" id="prevSeed" aria-label="Previous seed">←</button>
+          <span class="mini">seed <b id="seedOut">1</b></span>
+          <button type="button" class="btn" id="nextSeed" aria-label="Next seed">→</button>
+          <button type="button" class="btn" id="undo" disabled>Undo</button>
         </div>
-        <p class="hint">These fields are shared with every other tool. <a href="title-lab.html">Need a name? Title Lab →</a></p>
+        <div class="legend">Keep (locked groups don't shuffle)</div>
+        <div class="chips" id="locks"></div>
+        <div class="btn-row"><button type="button" class="btn" id="openGallery">Show 12 variants</button></div>
+        <div class="legend">Layout presets</div>
+        <div class="chips" id="layouts"></div>
+        <div class="legend">Saved looks</div>
+        <div class="saved" id="saved"></div>
+        <div class="swatch" style="grid-template-columns:1fr auto"><input type="text" id="lookName" placeholder="Name this look"><button type="button" class="btn" id="saveLook">Save</button></div>
       </div>
     </details>
-
-    <details open>
-      <summary>Colours</summary>
-      <div class="fields">
-        <div class="presets" id="presets"></div>
-        <div class="row3">
-          <label class="f"><span>Ground</span><div class="swatch"><input type="color" id="bg"><input type="text" id="bgHex" spellcheck="false"></div></label>
-          <label class="f"><span>Ink</span><div class="swatch"><input type="color" id="ink"><input type="text" id="inkHex" spellcheck="false"></div></label>
-          <label class="f"><span>Spot</span><div class="swatch"><input type="color" id="accent"><input type="text" id="accentHex" spellcheck="false"></div></label>
-        </div>
-        <p class="hint"><a href="palette-pull.html">Pull a palette from your image →</a></p>
-        <div class="row">
-          <label class="f"><span>Grain <output id="grainOut"></output></span><input type="range" id="grain" min="0" max="100" step="1"></label>
-          <label class="f"><span>Vignette <output id="vignetteOut"></output></span><input type="range" id="vignette" min="0" max="100" step="1"></label>
-        </div>
-        <label class="check"><input type="checkbox" id="frame"> Hairline frame</label>
-      </div>
-    </details>
-
-    <details open>
-      <summary>Motif</summary>
-      <div class="fields">
-        <div class="seg" id="motifKind" role="group" aria-label="Motif kind">
-          <button type="button" data-v="bars">Bars</button>
-          <button type="button" data-v="dots">Dots</button>
-          <button type="button" data-v="none">None</button>
-        </div>
-        <div class="row">
-          <label class="f"><span>Count <output id="countOut"></output></span><input type="range" id="count" min="1" max="16" step="1"></label>
-          <label class="f"><span>Spot mark <output id="missingOut"></output></span><input type="range" id="missing" min="0" max="16" step="1"></label>
-        </div>
-        <div class="seg" id="missingStyle" role="group" aria-label="Spot mark style">
-          <button type="button" data-v="outline">Outline</button>
-          <button type="button" data-v="filled">Filled</button>
-          <button type="button" data-v="gap">Gap</button>
-        </div>
-        <p class="hint">Nine Night: nine bars, the ninth left as an outline in the spot colour. Set the mark to 0 for a plain row.</p>
-      </div>
-    </details>
-
-    <details open>
-      <summary>Catalogue</summary>
-      <div class="fields">
-        <label class="check"><input type="checkbox" id="plate"> Show the catalogue number as a plate</label>
-        <div class="seg" id="platePos" role="group" aria-label="Plate position">
-          <button type="button" data-v="tr">Top right</button>
-          <button type="button" data-v="br">Bottom right</button>
-        </div>
-        <label class="f"><span>Plate text <output>blank = catalogue no.</output></span><input type="text" id="plateText" placeholder="DPWR-001"></label>
-        <label class="check"><input type="checkbox" id="barcode"> Barcode, bottom right</label>
-        <label class="f"><span>Barcode digits <output>12 or 13 · blank = generated</output></span><input type="text" id="barcodeDigits" inputmode="numeric" placeholder="5012345678900"></label>
-        <p class="hint">A real EAN-13 with a valid check digit. Leave the digits blank and one is derived from the catalogue number, so the same release always gets the same code.</p>
-      </div>
-    </details>
-
-    <details>
-      <summary>Type</summary>
-      <div class="fields">
-        <label class="f"><span>Face</span>
-          <select id="font">
-            <option value="Archivo">Archivo (house grotesque)</option>
-            <option value="Inter Tight">Inter Tight</option>
-            <option value="Barlow Condensed">Barlow Condensed</option>
-            <option value="Oswald">Oswald</option>
-            <option value="DM Serif Display">DM Serif Display</option>
-          </select>
-        </label>
-        <div class="row">
-          <label class="f"><span>Title size <output id="titleSizeOut"></output></span><input type="range" id="titleSize" min="50" max="130" step="1"></label>
-          <label class="f"><span>Title tracking <output id="trackingOut"></output></span><input type="range" id="tracking" min="-6" max="20" step="1"></label>
-        </div>
-        <div class="seg" id="titlePos" role="group" aria-label="Title position">
-          <button type="button" data-v="centre">Centre</button>
-          <button type="button" data-v="lower">Lower</button>
-          <button type="button" data-v="upper">Upper</button>
-        </div>
-        <label class="check"><input type="checkbox" id="titleAccent"> Set the last title line in the spot colour</label>
-        <p class="hint">The face, grain, vignette and frame carry over to the back sleeve and the release kit.</p>
-      </div>
-    </details>
-
-    <details>
-      <summary>Image</summary>
-      <div class="fields">
-        <label class="file-drop" id="drop">
-          <input type="file" id="imageFile" accept="image/*">
-          <span id="dropText">Drop an image here, or tap to choose</span>
-        </label>
-        <div class="img-meta" id="imgMeta" hidden><span id="imgInfo"></span><button type="button" id="imgClear">remove</button></div>
-        <div class="seg" id="imgMode" role="group" aria-label="Image placement">
-          <button type="button" data-v="bleed">Full bleed</button>
-          <button type="button" data-v="panel">Panel</button>
-          <button type="button" data-v="band">Band</button>
-        </div>
-        <div class="seg" id="imgTone" role="group" aria-label="Image tone">
-          <button type="button" data-v="ink">Ground → ink</button>
-          <button type="button" data-v="accent">Ground → spot</button>
-          <button type="button" data-v="original">Original</button>
-        </div>
-        <div class="row">
-          <label class="f"><span>Dim <output id="dimOut"></output></span><input type="range" id="dim" min="0" max="95" step="1"></label>
-          <label class="f"><span>Zoom <output id="zoomOut"></output></span><input type="range" id="zoom" min="100" max="300" step="1"></label>
-        </div>
-        <div class="row">
-          <label class="f"><span>Shift x <output id="shiftXOut"></output></span><input type="range" id="shiftX" min="-50" max="50" step="1"></label>
-          <label class="f"><span>Shift y <output id="shiftYOut"></output></span><input type="range" id="shiftY" min="-50" max="50" step="1"></label>
-        </div>
-        <p class="hint">Ground → ink maps the image onto your two colours, so whatever Suno or a photo gives you comes out in the house palette. The image is shared with Palette Pull and the Kit.</p>
-      </div>
-    </details>
-
-    <details open>
-      <summary>Export</summary>
-      <div class="fields">
-        <div class="seg" id="exportSize" role="group" aria-label="Export size">
-          <button type="button" data-v="3000">3000 px</button>
-          <button type="button" data-v="2000">2000 px</button>
-          <button type="button" data-v="1400">1400 px</button>
-        </div>
-        <div class="btn-row">
-          <button type="button" class="btn primary" id="savePng">Save PNG</button>
-          <a class="btn" href="tracklist.html">Back sleeve →</a>
-          <a class="btn" href="release-kit.html">Release kit →</a>
-        </div>
-        <p class="hint">Everything here is remembered in this browser and travels with release.json (top right), image included.</p>
-      </div>
-    </details>
-
   </aside>
 </main>
 
+<section class="gallery" id="gallery" hidden aria-label="Variants">
+  <div class="gallery-head">
+    <h2>Variants <span class="mini" id="gSeeds" style="font:400 12px var(--f-mono);letter-spacing:0;text-transform:none;color:var(--chalk-faint)"></span></h2>
+    <div class="btn-row"><button type="button" class="btn" id="gPrev">← Previous 12</button><button type="button" class="btn" id="gMore">Next 12 →</button><button type="button" class="btn" id="gClose">Close</button></div>
+  </div>
+  <p class="hint">Same words and image, same locks. Click one to use it; Undo brings the old one back.</p>
+  <div class="ggrid" id="ggrid"></div>
+</section>
+
 <script src="shared/press.js"></script>
+<script src="shared/looks.js"></script>
 <script src="shared/sleeve-render.js"></script>
 <script>
 (() => {
 "use strict";
-const $ = SP.$;
+const $ = SP.$, SR = SleeveRender;
 SP.mountNav("sleeve-press.html");
 
-let state = SleeveRender.flatten(SP.get());
-let image = null;
-let writing = false;
+let state = SR.flatten(SP.get());
+let image = null, writing = false;
+const undoStack = [];
 
 /* ---------- write-through to the shared record ---------- */
-function commit() {
+function commit(paletteName) {
   writing = true;
   const sleeve = {};
-  for (const k of Object.keys(SleeveRender.SLEEVE_DEFAULTS)) sleeve[k] = state[k];
-  const release = {}; SleeveRender.RELEASE_KEYS.forEach(k => release[k] = state[k]);
-  const palette = {}; SleeveRender.PALETTE_KEYS.forEach(k => palette[k] = state[k]);
+  for (const k of Object.keys(SR.SLEEVE_DEFAULTS)) sleeve[k] = state[k];
+  const release = {}; SR.RELEASE_KEYS.forEach(k => release[k] = state[k]);
+  const palette = {}; SR.PALETTE_KEYS.forEach(k => palette[k] = state[k]);
   SP.patch("sleeve", sleeve); SP.patch("release", release);
-  // A hand-edited colour no longer matches a named or extracted palette; keep the swatches, drop the stale name.
-  const p = SP.get().palette;
-  const changed = SleeveRender.PALETTE_KEYS.some(k => p[k] !== palette[k]);
-  SP.patch("palette", changed ? { ...palette, name: "Custom" } : palette);
+  const p = SP.get().palette, changed = SR.PALETTE_KEYS.some(k => p[k] !== palette[k]);
+  SP.patch("palette", paletteName ? { ...palette, name: paletteName } : changed ? { ...palette, name: "Custom" } : palette);
   writing = false;
 }
+const meta = () => SP.get().sleeve;
+const putMeta = (o) => { writing = true; SP.patch("sleeve", o); writing = false; };
 
-/* ---------- controls ---------- */
-const TEXT = ["artist", "title", "footer", "catalog", "year", "plateText", "barcodeDigits"];
-const RANGES = ["grain", "vignette", "count", "missing", "titleSize", "tracking", "dim", "zoom", "shiftX", "shiftY"];
-const SEGS = ["motifKind", "missingStyle", "titlePos", "imgMode", "imgTone", "exportSize", "platePos"];
-const COLORS = ["bg", "ink", "accent"];
-const CHECKS = ["frame", "titleAccent", "plate", "barcode"];
-const UNIT = { titleSize: "%", dim: "%", zoom: "%" };
+/* ---------- control schema ---------- */
+const FONT_OPTS = Looks.FONTS.map(f => [f.n, f.n]);
+const S_ = (k, label, opts, extra = {}) => ({ k, t: "seg", label, opts, ...extra });
+const R = (k, label, min, max, step = 1, unit = "", extra = {}) => ({ k, t: "range", label, min, max, step, unit, half: true, ...extra });
+const SEL = (k, label, opts) => ({ k, t: "select", label, opts });
+const C = (k, label) => ({ k, t: "check", label });
+const T = (k, label, extra = {}) => ({ k, t: "text", label, ...extra });
+const H = (text) => ({ t: "hint", text });
 
+const SECTIONS = [
+  { title: "Release", open: true, items: [
+    T("artist", "Artist"), { k: "title", t: "textarea", label: "Title", note: "one line per row" }, T("footer", "Footer line"),
+    { ...T("catalog", "Catalogue no."), half: true }, { ...T("year", "Edition / year"), half: true },
+    H('Shared with every other tool. <a href="title-lab.html">Need a name? Title Lab →</a>'),
+  ] },
+  { title: "Colours", open: true, items: [
+    { t: "presets" },
+    { t: "colors" },
+    { t: "roll" },
+    R("grain", "Grain", 0, 100), R("vignette", "Vignette", 0, 100),
+    H('<a href="palette-pull.html">Pull a palette from your image →</a>'),
+  ] },
+  { title: "Layout", items: [
+    S_("align", "Alignment", [["left", "Left"], ["centre", "Centre"], ["right", "Right"]]),
+    R("margin", "Margin", 5, 20, 0.5, "%"), R("artistY", "Artist height", 4, 96, 0.2, "%"),
+    R("motifY", "Motif height", 4, 96, 0.2, "%"), R("footerY", "Footer height", 4, 97, 0.2, "%"),
+    S_("titlePos", "Title block", [["upper", "Upper"], ["centre", "Centre"], ["lower", "Lower"]]),
+    R("titleDy", "Title nudge", -30, 20, 0.5, "%", { half: false }),
+    H("Heights are the baseline as a share of the sleeve, so 50% sits in the middle. The title shrinks to fit the room above it."),
+  ] },
+  { title: "Type", items: [
+    SEL("font", "Title face", FONT_OPTS), SEL("bodyFont", "Artist, footer and plate face", [["", "Same as title"], ...FONT_OPTS]),
+    R("titleSize", "Title size", 40, 140, 1, "%"), R("leading", "Title leading", 70, 120, 0.5, "%"),
+    R("tracking", "Title tracking", -8, 30, 1), R("artistSize", "Artist size", 60, 200, 5, "%"),
+    R("artistTrack", "Artist tracking", 0, 60, 1), R("footerSize", "Footer size", 60, 180, 5, "%"),
+    R("footerTrack", "Footer tracking", 0, 50, 1),
+    S_("titleCase", "Title case", [["upper", "UPPER"], ["title", "Title"], ["lower", "lower"]]),
+    C("titleAccent", "Set the last title line in the spot colour"),
+  ] },
+  { title: "Motif", items: [
+    SEL("motifKind", "Kind", [["bars", "Bars"], ["dots", "Dots"], ["squares", "Squares"], ["rings", "Rings"], ["diamonds", "Diamonds"], ["ticks", "Ticks"], ["wave", "Waveform (from the catalogue no.)"], ["slants", "Slants"], ["none", "None"]]),
+    R("count", "Count", 1, 24), R("missing", "Spot mark", 0, 24),
+    R("motifSize", "Size", 40, 220, 5, "%"), R("motifPitch", "Spacing", 60, 260, 5, "%"),
+    S_("missingStyle", "Spot mark style", [["outline", "Outline"], ["filled", "Filled"], ["gap", "Gap"]]),
+    H("Nine Night: nine bars, the ninth left as an outline in the spot colour. Set the mark to 0 for a plain row."),
+  ] },
+  { title: "Border", items: [
+    C("frame", "Show a border"),
+    SEL("frameStyle", "Style", [["hairline", "Hairline"], ["double", "Double"], ["thick", "Thick"], ["inset", "Heavy + inner line"], ["dashed", "Dashed"], ["round", "Rounded"], ["corners", "Corner marks"], ["crop", "Crop marks"]]),
+    R("frameInset", "Inset", 1, 12, 0.5, "%"), R("frameWidth", "Weight", 40, 400, 10, "%"),
+    R("frameOpacity", "Opacity", 5, 100, 1, "%"), S_("frameColor", "Colour", [["ink", "Ink"], ["accent", "Spot"]], { half: true }),
+  ] },
+  { title: "Backdrop", items: [
+    SEL("wash", "Spot-colour wash", [["none", "None"], ["top", "From the top"], ["bottom", "From the bottom"], ["diagonal", "Diagonal"], ["radial", "Glow (at the shape position)"]]),
+    R("washAmt", "Wash strength", 0, 100, 1, "%", { half: false }),
+    SEL("shape", "Big shape", [["none", "None"], ["circle", "Circle"], ["ring", "Ring"], ["square", "Square"], ["half", "Half circle"], ["bars", "Bars"]]),
+    R("shapeAmt", "Shape opacity", 0, 100, 1, "%"), R("shapeSize", "Shape size", 10, 160, 1, "%"),
+    R("shapeX", "Shape across", 0, 100, 1, "%"), R("shapeY", "Shape down", 0, 100, 1, "%"),
+    S_("shapeColor", "Shape colour", [["accent", "Spot"], ["ink", "Ink"]]),
+    SEL("texture", "Texture", [["none", "None"], ["halftone", "Halftone (heavier toward the bottom)"], ["lines", "Fine lines"], ["grid", "Grid"]]),
+    R("textureAmt", "Texture strength", 0, 100, 1, "%", { half: false }),
+  ] },
+  { title: "Catalogue", items: [
+    C("plate", "Show the catalogue number as a plate"),
+    S_("platePos", "Plate position", [["tr", "Top right"], ["br", "Bottom right"]]),
+    T("plateText", "Plate text", { note: "blank = catalogue no.", placeholder: "DPWR-001" }),
+    C("barcode", "Barcode, bottom right"),
+    T("barcodeDigits", "Barcode digits", { note: "12 or 13 · blank = generated", placeholder: "5012345678900" }),
+    H("A real EAN-13 with a valid check digit. Leave the digits blank and one is derived from the catalogue number, so the same release always gets the same code."),
+  ] },
+  { title: "Image", items: [
+    { t: "drop" },
+    S_("imgMode", "Placement", [["bleed", "Full bleed"], ["panel", "Panel"], ["band", "Band"]]),
+    S_("imgTone", "Tone", [["ink", "Ground → ink"], ["accent", "Ground → spot"], ["original", "Original"]]),
+    R("dim", "Dim", 0, 95, 1, "%"), R("zoom", "Zoom", 100, 300, 1, "%"),
+    R("shiftX", "Shift x", -50, 50), R("shiftY", "Shift y", -50, 50),
+    R("imgBlur", "Blur", 0, 100, 1, "%"), R("imgContrast", "Contrast", 50, 200, 5, "%"),
+    R("imgPosterize", "Posterize", 0, 8, 1, "", { fmt: v => v < 2 ? "off" : v + " levels" }),
+    H("Ground → ink maps the image onto your two colours, so whatever Suno or a photo gives you comes out in the house palette. Posterize flattens it into bands, like a screenprint."),
+  ] },
+  { title: "Export", open: true, items: [
+    S_("exportSize", "Size", [["3000", "3000 px"], ["2000", "2000 px"], ["1400", "1400 px"]]),
+    { t: "export" },
+  ] },
+];
+
+/* ---------- builder ---------- */
+const ctrls = {};      // key -> { reflect() }
+const ticket = $("ticket");
+function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
+function buildItem(it) {
+  const k = it.k;
+  if (it.t === "hint") return el(`<p class="hint">${it.text}</p>`);
+  if (it.t === "text" || it.t === "textarea") {
+    const node = el(`<label class="f"><span>${it.label}${it.note ? ` <output>${it.note}</output>` : ""}</span></label>`);
+    const inp = document.createElement(it.t === "text" ? "input" : "textarea");
+    if (it.t === "text") inp.type = "text"; else { inp.rows = 2; inp.className = "up"; }
+    if (it.placeholder) inp.placeholder = it.placeholder;
+    inp.id = k; inp.addEventListener("input", () => set(k, inp.value));
+    node.appendChild(inp);
+    ctrls[k] = () => { if (document.activeElement !== inp && inp.value !== state[k]) inp.value = state[k]; };
+    return node;
+  }
+  if (it.t === "range") {
+    const node = el(`<label class="f"><span>${it.label} <output></output></span><input type="range" min="${it.min}" max="${it.max}" step="${it.step}"></label>`);
+    const inp = node.querySelector("input"), out = node.querySelector("output"); inp.id = k;
+    inp.addEventListener("input", () => set(k, Number(inp.value)));
+    ctrls[k] = () => {
+      if (k === "missing") inp.max = state.count;
+      inp.value = state[k];
+      out.textContent = it.fmt ? it.fmt(state[k]) : (k === "missing" && !state.missing) ? "none" : (Math.round(state[k] * 10) / 10) + it.unit;
+    };
+    return node;
+  }
+  if (it.t === "seg") {
+    const node = el(`<div class="f" style="display:grid;gap:5px"><span class="legend">${it.label}</span><div class="seg" role="group" aria-label="${it.label}"></div></div>`);
+    const seg = node.querySelector(".seg");
+    it.opts.forEach(([v, l]) => { const b = document.createElement("button"); b.type = "button"; b.dataset.v = v; b.textContent = l; seg.appendChild(b); });
+    seg.addEventListener("click", e => { const b = e.target.closest("button"); if (b) set(k, b.dataset.v); });
+    ctrls[k] = () => { for (const b of seg.children) b.setAttribute("aria-pressed", String(b.dataset.v === String(state[k]))); };
+    return node;
+  }
+  if (it.t === "select") {
+    const node = el(`<label class="f"><span>${it.label}</span><select></select></label>`);
+    const sel = node.querySelector("select"); sel.id = k;
+    it.opts.forEach(([v, l]) => sel.add(new Option(l, v)));
+    sel.addEventListener("change", () => set(k, sel.value));
+    ctrls[k] = () => { sel.value = state[k]; };
+    return node;
+  }
+  if (it.t === "check") {
+    const node = el(`<label class="check"><input type="checkbox"> ${it.label}</label>`);
+    const inp = node.querySelector("input"); inp.id = k;
+    inp.addEventListener("change", () => set(k, inp.checked));
+    ctrls[k] = () => { inp.checked = !!state[k]; };
+    return node;
+  }
+  if (it.t === "presets") {
+    const node = el(`<div class="presets scroll"></div>`);
+    Looks.PALETTES.forEach(p => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "preset";
+      b.innerHTML = `<span class="chip" style="background:${p.bg}"><b style="background:${p.accent}"></b><i style="background:${p.ink}"></i></span>${p.name}`;
+      b.addEventListener("click", () => bulk(() => { state.bg = p.bg; state.ink = p.ink; state.accent = p.accent; }, p.name));
+      node.appendChild(b);
+    });
+    return node;
+  }
+  if (it.t === "colors") {
+    const node = el(`<div class="row3"></div>`);
+    [["bg", "Ground"], ["ink", "Ink"], ["accent", "Spot"]].forEach(([k2, l]) => {
+      const f = el(`<label class="f"><span>${l}</span><div class="swatch"><input type="color"><input type="text" spellcheck="false"></div></label>`);
+      const [c, h] = f.querySelectorAll("input"); c.id = k2; h.id = k2 + "Hex";
+      c.addEventListener("input", () => set(k2, c.value));
+      h.addEventListener("change", () => { const v = h.value.trim(); if (SP.hexToRgb(v)) set(k2, (v.startsWith("#") ? v : "#" + v).toLowerCase()); else ctrls[k2](); });
+      ctrls[k2] = () => { c.value = state[k2]; if (document.activeElement !== h) h.value = state[k2]; };
+      node.appendChild(f);
+    });
+    return node;
+  }
+  if (it.t === "roll") {
+    const node = el(`<div class="btn-row"><span class="legend" style="align-self:center">Roll a palette</span></div>`);
+    [["dark", "Dark"], ["light", "Light"], ["bold", "Bold"], ["any", "Any"]].forEach(([m, l]) => {
+      const b = el(`<button type="button" class="btn small">${l}</button>`);
+      b.addEventListener("click", () => {
+        const n = (meta().paletteSeed || 0) + 1; putMeta({ paletteSeed: n });
+        const p = Looks.makePalette(SP.mulberry32(n * 7907 + m.length), m);
+        bulk(() => { state.bg = p.bg; state.ink = p.ink; state.accent = p.accent; }, `Rolled ${m} #${n}`);
+      });
+      node.appendChild(b);
+    });
+    return node;
+  }
+  if (it.t === "drop") {
+    const node = el(`<div class="fields" style="padding:0"><label class="file-drop" id="drop"><input type="file" id="imageFile" accept="image/*"><span id="dropText">Drop an image here, or tap to choose</span></label><div class="img-meta" id="imgMeta" hidden><span id="imgInfo"></span><button type="button" id="imgClear">remove</button></div></div>`);
+    return node;
+  }
+  if (it.t === "export") {
+    return el(`<div class="fields" style="padding:0"><div class="btn-row"><button type="button" class="btn primary" id="savePng">Save PNG</button><a class="btn" href="tracklist.html">Back sleeve →</a><a class="btn" href="release-kit.html">Release kit →</a></div><p class="hint">Everything here is remembered in this browser and travels with release.json (top right), image included.</p></div>`);
+  }
+}
+SECTIONS.forEach(sec => {
+  const d = document.createElement("details"); if (sec.open) d.open = true;
+  d.innerHTML = `<summary>${sec.title}</summary><div class="fields"></div>`;
+  const f = d.querySelector(".fields"); let row = null;
+  sec.items.forEach(it => {
+    const node = buildItem(it);
+    if (it.half) { if (!row) { row = el(`<div class="row"></div>`); f.appendChild(row); } row.appendChild(node); if (row.children.length === 2) row = null; }
+    else { row = null; f.appendChild(node); }
+  });
+  ticket.appendChild(d);
+});
+
+/* ---------- state ---------- */
 function reflect() {
-  TEXT.forEach(k => { if ($(k).value !== state[k]) $(k).value = state[k]; });
-  RANGES.forEach(k => { $(k).value = state[k]; $(k + "Out").textContent = (k === "missing" && !state.missing) ? "none" : state[k] + (UNIT[k] || ""); });
-  $("missing").max = state.count;
-  SEGS.forEach(k => { for (const b of $(k).querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.v === String(state[k]))); });
-  COLORS.forEach(k => { $(k).value = state[k]; $(k + "Hex").value = state[k]; });
-  CHECKS.forEach(k => { $(k).checked = !!state[k]; });
-  $("font").value = state.font;
+  Object.values(ctrls).forEach(fn => fn());
+  $("seedOut").textContent = meta().lookSeed || 0;
+  $("undo").disabled = !undoStack.length;
+  renderLocks(); renderLayouts(); renderSaved();
 }
 function set(k, v) { state[k] = v; if (k === "count" && state.missing > v) state.missing = v; commit(); reflect(); queueRender(); }
-
-TEXT.forEach(k => $(k).addEventListener("input", e => set(k, e.target.value)));
-RANGES.forEach(k => $(k).addEventListener("input", e => set(k, Number(e.target.value))));
-CHECKS.forEach(k => $(k).addEventListener("change", e => set(k, e.target.checked)));
-$("font").addEventListener("change", e => set("font", e.target.value));
-SEGS.forEach(k => $(k).addEventListener("click", e => { const b = e.target.closest("button"); if (b) set(k, b.dataset.v); }));
-COLORS.forEach(k => {
-  $(k).addEventListener("input", e => set(k, e.target.value));
-  $(k + "Hex").addEventListener("change", e => { const v = e.target.value.trim(); if (SP.hexToRgb(v)) set(k, v.startsWith("#") ? v.toLowerCase() : "#" + v.toLowerCase()); else reflect(); });
+/* A change that swaps many settings at once: undoable. */
+function bulk(fn, paletteName) {
+  undoStack.push({ state: { ...state }, seed: meta().lookSeed || 0 }); if (undoStack.length > 40) undoStack.shift();
+  fn(); commit(paletteName || state.paletteName); delete state.paletteName; reflect(); queueRender();
+}
+$("undo").addEventListener("click", () => {
+  const prev = undoStack.pop(); if (!prev) return;
+  const words = {}; SR.RELEASE_KEYS.forEach(k => words[k] = state[k]);
+  state = { ...prev.state, ...words }; putMeta({ lookSeed: prev.seed }); commit(); reflect(); queueRender();
 });
 
-const pr = $("presets");
-SP.PRESETS.forEach(p => {
-  const b = document.createElement("button"); b.type = "button"; b.className = "preset";
-  b.innerHTML = `<span class="chip" style="background:${p.bg}"><b style="background:${p.accent}"></b><i style="background:${p.ink}"></i></span>${p.name}`;
-  b.addEventListener("click", () => {
-    state.bg = p.bg; state.ink = p.ink; state.accent = p.accent; commit();
-    SP.patch("palette", { name: p.name }); reflect(); queueRender();
+/* ---------- shuffle, locks, gallery ---------- */
+const LOCKS = [["colour", "Colours"], ["type", "Type"], ["layout", "Layout"], ["motif", "Motif"], ["border", "Border"], ["backdrop", "Backdrop"]];
+const locks = () => meta().lookLocks || {};
+function renderLocks() {
+  const host = $("locks"); if (!host.children.length) LOCKS.forEach(([k, l]) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip-b"; b.dataset.k = k; b.textContent = l;
+    b.addEventListener("click", () => { putMeta({ lookLocks: { ...locks(), [k]: !locks()[k] } }); renderLocks(); });
+    host.appendChild(b);
   });
-  pr.appendChild(b);
+  for (const b of host.children) b.setAttribute("aria-pressed", String(!!locks()[b.dataset.k]));
+}
+function lookFor(seed) { const words = {}; SR.RELEASE_KEYS.forEach(k => words[k] = state[k]); return { ...Looks.randomize(state, seed, locks()), ...words }; }
+function goSeed(n) {
+  n = Math.max(1, n);
+  const next = lookFor(n); bulk(() => { const name = next.paletteName; state = next; state.paletteName = name; putMeta({ lookSeed: n }); });
+}
+$("shuffle").addEventListener("click", () => goSeed((meta().lookSeed || 0) + 1));
+$("nextSeed").addEventListener("click", () => goSeed((meta().lookSeed || 0) + 1));
+$("prevSeed").addEventListener("click", () => goSeed((meta().lookSeed || 2) - 1));
+
+let gBase = 0;
+async function drawGallery() {
+  const grid = $("ggrid"); grid.innerHTML = ""; $("gallery").hidden = false;
+  $("gSeeds").textContent = `seeds ${gBase + 1}–${gBase + 12}`;
+  const cells = [];
+  for (let i = 1; i <= 12; i++) {
+    const seed = gBase + i, b = el(`<button type="button" class="gcell"><canvas width="420" height="420"></canvas><span><b>seed ${seed}</b><em></em></span></button>`);
+    b.addEventListener("click", () => { goSeed(seed); window.scrollTo({ top: 0, behavior: "smooth" }); });
+    grid.appendChild(b); cells.push([b, seed]);
+  }
+  for (const [b, seed] of cells) {
+    const v = lookFor(seed); b.querySelector("em").textContent = `${v.paletteName || ""} · ${v.font}`;
+    b.querySelector("em").style.fontStyle = "normal";
+    try { await SR.render(b.querySelector("canvas"), v, image); } catch (e) { console.error(e); }
+    await new Promise(r => setTimeout(r, 0));
+  }
+}
+$("openGallery").addEventListener("click", () => { gBase = meta().lookSeed || 0; drawGallery().then(() => {}); $("gallery").scrollIntoView({ behavior: "smooth" }); });
+$("gMore").addEventListener("click", () => { gBase += 12; drawGallery(); });
+$("gPrev").addEventListener("click", () => { gBase = Math.max(0, gBase - 12); drawGallery(); });
+$("gClose").addEventListener("click", () => { $("gallery").hidden = true; });
+
+/* ---------- layout presets ---------- */
+function renderLayouts() {
+  const host = $("layouts"); if (host.children.length) return;
+  Object.entries(Looks.LAYOUTS).forEach(([k, L]) => {
+    const b = el(`<button type="button" class="chip-b">${L.label}</button>`);
+    b.addEventListener("click", () => bulk(() => { Looks.LAYOUT_KEYS.forEach(key => state[key] = L[key]); }));
+    host.appendChild(b);
+  });
+}
+
+/* ---------- saved looks ---------- */
+const looks = () => SP.get().looks || [];
+function renderSaved() {
+  const host = $("saved"); host.innerHTML = "";
+  if (!looks().length) host.appendChild(el(`<p class="hint">None yet. Save one to reuse it on the next release in a series.</p>`));
+  looks().forEach((L, i) => {
+    const it = el(`<span class="it"><button type="button"><i></i><span></span></button><button type="button" class="x" aria-label="Delete">×</button></span>`);
+    it.querySelector("i").style.background = L.look.bg; it.querySelector("i").style.boxShadow = `inset -4px 0 0 ${L.look.accent}`;
+    it.querySelector("span span").textContent = L.name;
+    const [apply, del] = it.querySelectorAll("button");
+    apply.addEventListener("click", () => bulk(() => Object.assign(state, L.look), L.look.paletteName));
+    del.addEventListener("click", () => { SP.set("looks", looks().filter((_, k) => k !== i)); renderSaved(); });
+    host.appendChild(it);
+  });
+}
+$("saveLook").addEventListener("click", () => {
+  const name = $("lookName").value.trim() || `Look ${looks().length + 1}`;
+  const look = {}; SR.LOOK_KEYS.forEach(k => look[k] = state[k]); ["bg", "ink", "accent"].forEach(k => look[k] = state[k]);
+  look.paletteName = SP.get().palette.name;
+  writing = true; SP.set("looks", [...looks().filter(l => l.name !== name), { name, look }]); writing = false;
+  $("lookName").value = ""; renderSaved(); SP.toast(`Saved look “${name}”`);
 });
 
+/* ---------- image ---------- */
 SP.bindImageDrop({ drop: $("drop"), input: $("imageFile"), text: $("dropText"), meta: $("imgMeta"), info: $("imgInfo"), clear: $("imgClear") });
 SP.onImage(async () => { image = await SP.image(); queueRender(); });
 
-/* ---------- render ---------- */
+/* ---------- render + export ---------- */
 const queueRender = SP.rafOnce(async () => {
-  try { await SleeveRender.render($("preview"), state, image); } catch (e) { console.error(e); }
-  $("filenameOut").textContent = SleeveRender.filename(state, state.exportSize);
+  try { await SR.render($("preview"), state, image); } catch (e) { console.error(e); }
+  $("filenameOut").textContent = SR.filename(state, state.exportSize);
 });
-
 $("savePng").addEventListener("click", async () => {
   const btn = $("savePng"); btn.disabled = true; btn.textContent = "Rendering…";
   try {
     const size = Number(state.exportSize);
     const c = document.createElement("canvas"); c.width = c.height = size;
-    await SleeveRender.render(c, state, image);
+    await SR.render(c, state, image);
     const blob = await SP.canvasBlob(c);
     if (!blob) throw new Error("render failed");
-    SP.download(blob, SleeveRender.filename(state, size));
+    SP.download(blob, SR.filename(state, size));
     SP.toast(`Saved ${size} × ${size} PNG`);
   } catch (e) { SP.toast("Couldn't save the file."); }
   finally { btn.disabled = false; btn.textContent = "Save PNG"; }
 });
 
 /* Another tool (Palette Pull, Title Lab, an import) changed the record. */
-SP.on((db, external) => {
-  if (writing) return;
-  state = SleeveRender.flatten(db); reflect(); queueRender();
-});
-window.addEventListener("pageshow", e => { if (e.persisted) { state = SleeveRender.flatten(SP.get()); reflect(); queueRender(); } });
+SP.on(() => { if (writing) return; state = SR.flatten(SP.get()); reflect(); queueRender(); });
+window.addEventListener("pageshow", e => { if (e.persisted) { state = SR.flatten(SP.get()); reflect(); queueRender(); } });
 
 (async () => { image = await SP.image(); reflect(); queueRender(); document.fonts?.ready?.then(queueRender); })();
 })();

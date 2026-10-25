@@ -11,7 +11,7 @@ const DEFAULTS = {
   showFeat: true, showBpm: true, showKey: true, showLength: true, showRuntime: true,
   rules: true, scale: 100,
   credits: "", copyright: true,
-  ghost: false, ghostDim: 82,
+  ghost: false, ghostDim: 82, backdrop: true, trackCase: "upper",
   exportSize: "3000", textFormat: "plain",
 };
 function settings(db) {
@@ -54,36 +54,36 @@ async function render(canvas, db, image) {
   const sl = SR.flatten(db), ts = settings(db), tracks = db.tracks;
   const W = canvas.width, H = canvas.height, u = W;
   const ctx = canvas.getContext("2d");
-  await SR.loadFont(sl.font);
+  await SR.loadFonts(sl);
   const bg = hexToRgb(sl.bg) || [21, 18, 15], ink = hexToRgb(sl.ink) || [236, 230, 218];
   const face = SR.faceStack(sl.font);
   const wt = (w) => SR.weightFor(sl.font, w);
-  const X = u * 0.11, R = W - X;
+  const bodyName = sl.bodyFont || sl.font, bface = SR.faceStack(bodyName), bwt = (w) => SR.weightFor(bodyName, w);
+  const spot = hexToRgb(sl.accent) || [155, 27, 30];
+  const tc = (s) => ts.trackCase === "asis" ? s : SR.applyCase(s, ts.trackCase === "title" ? "title" : "upper");
+  const X = u * (sl.margin || 11) / 100, R = W - X;
 
   ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, 0, W, H);
   const timg = ts.ghost ? SR.toned(image, sl) : null;
   if (timg) { SR.drawCover(ctx, timg, 0, 0, W, H, { zoom: sl.zoom, shiftX: sl.shiftX, shiftY: sl.shiftY }); ctx.fillStyle = rgba(bg, ts.ghostDim / 100); ctx.fillRect(0, 0, W, H); }
+  if (ts.backdrop) SR.drawBackdrop(ctx, W, H, { ...sl, shape: "none" }, bg, ink, spot, 0.45);   // the front's wash and texture, quieter; the big shape would sit behind the list
   SR.applyVignette(ctx, W, H, sl, bg, ink);
-  if (sl.frame) {
-    const inset = u * 0.045;
-    ctx.strokeStyle = rgba(ink, 0.14); ctx.lineWidth = Math.max(1, u * 0.00125);
-    ctx.strokeRect(inset, inset, W - inset * 2, H - inset * 2);
-  }
+  SR.drawFrame(ctx, W, H, sl, ink, spot);
 
   // Head: artist, year, title line, runtime
   ctx.textBaseline = "alphabetic";
   const artistSize = u * 0.0295;
-  ctx.font = `${wt("700")} ${artistSize}px ${face}`; ctx.fillStyle = rgba(ink, 1);
+  ctx.font = `${bwt("700")} ${artistSize}px ${bface}`; ctx.fillStyle = rgba(ink, 1);
   SR.drawTracked(ctx, sl.artist.toUpperCase(), X, u * 0.158, 0.32, artistSize);
   if (sl.year.trim()) {
-    const ys = u * 0.016; ctx.font = `${wt("600")} ${ys}px ${face}`; ctx.fillStyle = rgba(ink, 0.6);
+    const ys = u * 0.016; ctx.font = `${bwt("600")} ${ys}px ${bface}`; ctx.fillStyle = rgba(ink, 0.6);
     const w = SR.measureTracked(ctx, sl.year.toUpperCase(), 0.26, ys);
     SR.drawTracked(ctx, sl.year.toUpperCase(), R - w, u * 0.158, 0.26, ys);
   }
-  const titleLine = sl.title.split("\n").map(s => s.trim()).filter(Boolean).join(" ").toUpperCase();
+  const titleLine = SR.applyCase(sl.title.split("\n").map(s => s.trim()).filter(Boolean).join(" "), sl.titleCase);
   const total = SP.runtime(tracks);
   const runText = ts.showRuntime && tracks.length ? `${tracks.length} TRACK${tracks.length === 1 ? "" : "S"}${total ? "  ·  " + SP.fmtTime(total) : ""}` : "";
-  const runSize = u * 0.0165; ctx.font = `${wt("600")} ${runSize}px ${face}`;
+  const runSize = u * 0.0165; ctx.font = `${bwt("600")} ${runSize}px ${bface}`;
   const runW = runText ? SR.measureTracked(ctx, runText, 0.22, runSize) : 0;
   let tsz = u * 0.056; const tTrack = -0.01; const titleMax = R - X - (runW ? runW + u * 0.04 : 0);
   ctx.font = `${wt("700")} ${tsz}px ${face}`;
@@ -93,7 +93,7 @@ async function render(canvas, db, image) {
   ctx.font = `${wt("700")} ${tsz}px ${face}`; ctx.fillStyle = rgba(ink, 1);
   SR.drawTracked(ctx, titleLine, X, titleY, tTrack, tsz);
   if (runText) {
-    ctx.font = `${wt("600")} ${runSize}px ${face}`; ctx.fillStyle = rgba(ink, 0.55);
+    ctx.font = `${bwt("600")} ${runSize}px ${bface}`; ctx.fillStyle = rgba(ink, 0.55);
     SR.drawTracked(ctx, runText, R - runW, titleY, 0.22, runSize);
   }
   const ruleY = titleY + u * 0.03;
@@ -103,15 +103,15 @@ async function render(canvas, db, image) {
   // Foot: barcode, footer, credits (credits sit above the footer)
   const footerY = H - u * 0.078;
   let cornerTop = H - u * 0.065, barcodeLeft = R;
-  if (sl.barcode) { barcodeLeft = R - SR.barcodeWidth(u); cornerTop = SR.drawBarcode(ctx, u, R, cornerTop, face, bg, ink, sl); }
+  if (sl.barcode) { barcodeLeft = R - SR.barcodeWidth(u); cornerTop = SR.drawBarcode(ctx, u, R, cornerTop, bface, bg, ink, sl); }
   if (sl.footer.trim()) {
     let fs = u * 0.0172; const avail = (sl.barcode ? barcodeLeft - u * 0.03 : R) - X;
     ctx.fillStyle = rgba(ink, 0.58);
     let text = sl.footer.toUpperCase().replace(/\s*·\s*/g, "  ·  "), track = 0.25;
-    ctx.font = `${wt("600")} ${fs}px ${face}`;
+    ctx.font = `${bwt("600")} ${fs}px ${bface}`;
     if (SR.measureTracked(ctx, text, track, fs) > avail) { text = sl.footer.toUpperCase(); track = 0.16; }
     const w = SR.measureTracked(ctx, text, track, fs);
-    if (w > avail) { fs *= avail / w; ctx.font = `${wt("600")} ${fs}px ${face}`; }
+    if (w > avail) { fs *= avail / w; ctx.font = `${bwt("600")} ${fs}px ${bface}`; }
     SR.drawTracked(ctx, text, X, footerY, track, fs);
   }
   const credits = ts.credits.split("\n").map(s => s.trim()).filter(Boolean);
@@ -122,9 +122,9 @@ async function render(canvas, db, image) {
     const lastY = footerY - u * 0.036;
     creditsTop = lastY - (credits.length - 1) * pitch - cs;
     credits.forEach((line, i) => {
-      let size = cs; ctx.font = `${wt("600")} ${size}px ${face}`;
+      let size = cs; ctx.font = `${bwt("600")} ${size}px ${bface}`;
       const txt = line.toUpperCase(), w = SR.measureTracked(ctx, txt, 0.12, size);
-      if (w > availC) { size *= availC / w; ctx.font = `${wt("600")} ${size}px ${face}`; }
+      if (w > availC) { size *= availC / w; ctx.font = `${bwt("600")} ${size}px ${bface}`; }
       ctx.fillStyle = rgba(ink, 0.5);
       SR.drawTracked(ctx, txt, X, lastY - (credits.length - 1 - i) * pitch, 0.12, size);
     });
@@ -136,7 +136,7 @@ async function render(canvas, db, image) {
   if (sl.barcode) listBottom = Math.min(listBottom, cornerTop - u * 0.025);
 
   if (!tracks.length) {
-    ctx.font = `${wt("600")} ${u * 0.018}px ${face}`; ctx.fillStyle = rgba(ink, 0.35);
+    ctx.font = `${bwt("600")} ${u * 0.018}px ${bface}`; ctx.fillStyle = rgba(ink, 0.35);
     SR.drawTracked(ctx, "NO TRACKS YET", X, listTop + u * 0.04, 0.3, u * 0.018);
   } else if (ts.layout === "sides") {
     drawSides();
@@ -158,7 +158,7 @@ async function render(canvas, db, image) {
     const geom = (stack) => {
       const fs = Math.min(pitch * (stack ? 0.4 : 0.5), u * 0.036) * (ts.scale / 100);
       const ms = fs * 0.7, mTrack = 0.1, gap = fs * 1.3, cols = [];
-      ctx.font = `${wt("600")} ${ms}px ${face}`;
+      ctx.font = `${bwt("600")} ${ms}px ${bface}`;
       if (ts.showBpm && any(t => t.bpm)) cols.push(["bpm", SR.measureTracked(ctx, "000", mTrack, ms)]);
       if (ts.showKey && any(t => t.key)) cols.push(["key", SR.measureTracked(ctx, "F♯m", mTrack, ms)]);
       if (ts.showLength && any(t => t.length)) cols.push(["length", SR.measureTracked(ctx, "00:00", mTrack, ms)]);
@@ -172,7 +172,7 @@ async function render(canvas, db, image) {
     const { fs, ms, mTrack, gap, cols, titleX, titleMax, tSize } = G;
     let y = listTop + colHead;
     {
-      const cs = ms * 0.78; ctx.font = `${wt("600")} ${cs}px ${face}`; ctx.fillStyle = rgba(ink, 0.34);
+      const cs = ms * 0.78; ctx.font = `${bwt("600")} ${cs}px ${bface}`; ctx.fillStyle = rgba(ink, 0.34);
       let hx = R;
       for (let c = cols.length - 1; c >= 0; c--) {
         const [k, w] = cols[c], lab = k === "bpm" ? "BPM" : k === "key" ? "KEY" : "TIME";
@@ -181,19 +181,19 @@ async function render(canvas, db, image) {
     }
     groups.forEach(g => {
       if (multiSide) {
-        ctx.font = `${wt("700")} ${fs * 0.62}px ${face}`; ctx.fillStyle = rgba(ink, 0.55);
+        ctx.font = `${bwt("700")} ${fs * 0.62}px ${bface}`; ctx.fillStyle = rgba(ink, 0.55);
         SR.drawTracked(ctx, `SIDE ${g.side}`, X, y + headerH * 0.7, 0.3, fs * 0.62);
         y += headerH;
       }
       g.rows.forEach(({ t, i }, pos) => {
         const base = y + pitch / 2 + fs * (stack ? 0.1 : 0.34);
-        ctx.font = `${wt("600")} ${fs * 0.8}px ${face}`; ctx.fillStyle = rgba(ink, 0.5);
+        ctx.font = `${bwt("600")} ${fs * 0.8}px ${bface}`; ctx.fillStyle = rgba(ink, 0.5);
         SR.drawTracked(ctx, numberLabel(ts, g.side, pos, i), X, base, 0.12, fs * 0.8);
         drawTitle(titleX, base, titleMax, tSize, t, stack ? "stack" : "inline", fs);
         let cx = R;
         for (let c = cols.length - 1; c >= 0; c--) {
           const [k, w] = cols[c]; const val = t[k] || "";
-          ctx.font = `${wt("600")} ${ms}px ${face}`; ctx.fillStyle = rgba(ink, 0.62);
+          ctx.font = `${bwt("600")} ${ms}px ${bface}`; ctx.fillStyle = rgba(ink, 0.62);
           if (val) { const vw = SR.measureTracked(ctx, val, mTrack, ms); SR.drawTracked(ctx, val, cx - vw, base, mTrack, ms); }
           cx -= w + gap;
         }
@@ -207,29 +207,29 @@ async function render(canvas, db, image) {
   function uniformSize(maxW, fs) {
     let size = fs; const track = 0.02;
     ctx.font = `${wt("700")} ${fs}px ${face}`;
-    tracks.forEach(t => { const w = SR.measureTracked(ctx, t.title.toUpperCase(), track, fs); if (w > maxW) size = Math.min(size, fs * maxW / w); });
+    tracks.forEach(t => { const w = SR.measureTracked(ctx, tc(t.title), track, fs); if (w > maxW) size = Math.min(size, fs * maxW / w); });
     return Math.max(fs * 0.62, size);
   }
   function featOf(t) { return `FEAT. ${t.feat.toUpperCase()}`; }
   function featFits(t, maxW, size) {
     if (!t.feat) return true;
-    ctx.font = `${wt("700")} ${size}px ${face}`; const tw = SR.measureTracked(ctx, t.title.toUpperCase(), 0.02, size);
-    ctx.font = `${wt("600")} ${size * 0.7}px ${face}`;
+    ctx.font = `${wt("700")} ${size}px ${face}`; const tw = SR.measureTracked(ctx, tc(t.title), 0.02, size);
+    ctx.font = `${bwt("600")} ${size * 0.7}px ${bface}`;
     return tw + size * 0.3 + SR.measureTracked(ctx, featOf(t), 0.02, size * 0.7) <= maxW;
   }
   // mode: inline (feat after the title) | stack (feat on a second line) | none (caller handles it)
   function drawTitle(x, base, maxW, size, t, mode = "inline", fs = size) {
-    const track = 0.02, title = t.title.toUpperCase();
+    const track = 0.02, title = tc(t.title);
     ctx.font = `${wt("700")} ${size}px ${face}`; ctx.fillStyle = rgba(ink, 1);
     const tt = fitText(ctx, title, maxW + 0.5, size, track);
     const w = SR.drawTracked(ctx, tt, x, base, track, size);
     if (!ts.showFeat || !t.feat || mode === "none") return;
     if (mode === "stack") {
-      const fsz = fs * 0.6; ctx.font = `${wt("600")} ${fsz}px ${face}`; ctx.fillStyle = rgba(ink, 0.55);
+      const fsz = fs * 0.6; ctx.font = `${bwt("600")} ${fsz}px ${bface}`; ctx.fillStyle = rgba(ink, 0.55);
       SR.drawTracked(ctx, fitText(ctx, featOf(t), maxW, fsz, 0.12), x, base + fs * 0.72, 0.12, fsz);
     } else if (tt === title) {
       const fsz = size * 0.7, avail = maxW - w - size * 0.3;
-      ctx.font = `${wt("600")} ${fsz}px ${face}`; ctx.fillStyle = rgba(ink, 0.55);
+      ctx.font = `${bwt("600")} ${fsz}px ${bface}`; ctx.fillStyle = rgba(ink, 0.55);
       if (avail > 0) SR.drawTracked(ctx, fitText(ctx, " " + featOf(t), avail, fsz, track), x + w + size * 0.3, base, track, fsz);
     }
   }
@@ -246,11 +246,11 @@ async function render(canvas, db, image) {
     groups.forEach((g, ci) => {
       const gx = X + ci * (colW + gapC);
       const hs = fs * 0.72;
-      ctx.font = `${wt("700")} ${hs}px ${face}`; ctx.fillStyle = rgba(ink, 1);
+      ctx.font = `${bwt("700")} ${hs}px ${bface}`; ctx.fillStyle = rgba(ink, 1);
       SR.drawTracked(ctx, `SIDE ${g.side}`, gx, listTop + hs, 0.3, hs);
       const rt = SP.runtime(g.rows.map(r => r.t));
       if (rt) {
-        ctx.font = `${wt("600")} ${hs}px ${face}`; ctx.fillStyle = rgba(ink, 0.5);
+        ctx.font = `${bwt("600")} ${hs}px ${bface}`; ctx.fillStyle = rgba(ink, 0.5);
         const txt = SP.fmtTime(rt), w = SR.measureTracked(ctx, txt, 0.12, hs);
         SR.drawTracked(ctx, txt, gx + colW - w, listTop + hs, 0.12, hs);
       }
@@ -260,15 +260,15 @@ async function render(canvas, db, image) {
       g.rows.forEach(({ t, i }, pos) => {
         const base = y + pitch * 0.46;
         const lab = numberLabel({ numbering: "A1" }, g.side, pos, i);
-        ctx.font = `${wt("600")} ${fs * 0.8}px ${face}`; ctx.fillStyle = rgba(ink, 0.5);
+        ctx.font = `${bwt("600")} ${fs * 0.8}px ${bface}`; ctx.fillStyle = rgba(ink, 0.5);
         SR.drawTracked(ctx, lab, gx, base, 0.12, fs * 0.8);
         const nx = gx + fs * 2.8;
         drawTitle(nx, base, gx + colW - nx, sSize, t, "none");
         const sub = [...(ts.showFeat && t.feat ? [featOf(t)] : []), ...metaParts(t, ts)].join("  ·  ");
         if (sub) {
-          let ss = fs * 0.62; const sw = gx + colW - nx; ctx.font = `${wt("600")} ${ss}px ${face}`; ctx.fillStyle = rgba(ink, 0.5);
+          let ss = fs * 0.62; const sw = gx + colW - nx; ctx.font = `${bwt("600")} ${ss}px ${bface}`; ctx.fillStyle = rgba(ink, 0.5);
           const w0 = SR.measureTracked(ctx, sub, 0.1, ss); if (w0 > sw) ss = Math.max(fs * 0.62 * 0.78, ss * sw / w0);   // shrink a little, then truncate
-          ctx.font = `${wt("600")} ${ss}px ${face}`;
+          ctx.font = `${bwt("600")} ${ss}px ${bface}`;
           SR.drawTracked(ctx, fitText(ctx, sub, sw + 0.5, ss, 0.1), nx, base + fs * 0.62 * 1.55, 0.1, ss);
         }
         if (ts.rules) { ctx.strokeStyle = rgba(ink, 0.09); ctx.lineWidth = Math.max(1, u * 0.001); ctx.beginPath(); ctx.moveTo(gx, y + pitch); ctx.lineTo(gx + colW, y + pitch); ctx.stroke(); }
