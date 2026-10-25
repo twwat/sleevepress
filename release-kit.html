@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Release Kit · Sleeve Press</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter+Tight:wght@600;800&family=Barlow+Condensed:wght@600;700&family=Oswald:wght@500;700&family=DM+Serif+Display&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/press.css">
+<style>
+.pre { display: block; width: min(100%, 720px); margin: 0 auto; background: #000; box-shadow: 0 30px 60px -20px rgba(0,0,0,.8), 0 0 0 1px rgba(255,255,255,.04); }
+.pre canvas { display: block; width: 100%; height: auto; }
+.outlist { display: grid; gap: 6px; }
+.o { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--rule); background: var(--room); padding: 7px 10px; }
+.o .n { font-size: 13px; }
+.o .n small { display: block; font: 11px var(--f-mono); color: var(--chalk-faint); }
+.checks { display: grid; gap: 6px; }
+.chk { display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: var(--chalk-dim); }
+.chk b { font: 600 11px var(--f-mono); min-width: 38px; }
+.chk.ok b { color: var(--ok); } .chk.warn b { color: var(--warn); } .chk.bad b { color: var(--lamp-soft); }
+.series { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 8px; }
+.s { border: 1px solid var(--rule-strong); background: var(--room); padding: 4px; display: grid; gap: 4px; font: 10px var(--f-mono); color: var(--chalk-dim); }
+.s img { width: 100%; display: block; aspect-ratio: 1; object-fit: cover; }
+.s button { background: none; border: 0; color: var(--chalk-faint); text-decoration: underline; padding: 0; font: inherit; text-align: left; }
+.stepbar { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 11px var(--f-mono); color: var(--chalk-faint); }
+.stepbar a { color: var(--chalk-dim); }
+</style>
+</head>
+<body>
+<div id="sp-nav"></div>
+
+<div class="page-head">
+  <h1>Release Kit</h1>
+  <p>Everything for one release in one pass: cover sizes, back sleeve, banner and social tile, the tracklist and prompts as text, and release.json, zipped under the catalogue number. A series strip shows how a run of releases sits together.</p>
+</div>
+
+<main class="studio">
+  <section class="table" aria-label="Preview">
+    <div class="seg" id="which" role="group" aria-label="Preview" style="width:min(100%,720px);margin:0 auto 12px">
+      <button type="button" data-v="cover">Cover</button>
+      <button type="button" data-v="back">Back</button>
+      <button type="button" data-v="banner">Banner</button>
+      <button type="button" data-v="social">Social</button>
+      <button type="button" data-v="series">Series</button>
+    </div>
+    <div class="pre"><canvas id="preview" width="1000" height="1000" aria-label="Output preview"></canvas></div>
+    <div class="table-foot"><span id="dimOut">—</span><output id="fileOut">—</output></div>
+  </section>
+
+  <aside class="ticket" aria-label="Kit settings">
+    <details open>
+      <summary>Ready to ship? <span class="counter" id="readyOut"></span></summary>
+      <div class="fields">
+        <div class="checks" id="checks"></div>
+        <div class="stepbar"><a href="index.html">Desk</a><a href="sleeve-press.html">Sleeve</a><a href="tracklist.html">Tracklist</a><a href="style-forge.html">Style</a><a href="palette-pull.html">Palette</a></div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Files</summary>
+      <div class="fields">
+        <div class="outlist" id="outlist"></div>
+        <div class="btn-row">
+          <button type="button" class="btn primary" id="zipBtn">Download kit (.zip)</button>
+          <button type="button" class="btn" id="allOn">All</button>
+          <button type="button" class="btn" id="allOff">None</button>
+        </div>
+        <p class="hint" id="zipHint">The zip is built in your browser. Nothing is uploaded.</p>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Series <span class="counter" id="serCount"></span></summary>
+      <div class="fields">
+        <div class="series" id="series"></div>
+        <div class="btn-row">
+          <button type="button" class="btn" id="serAdd">Add this release</button>
+          <button type="button" class="btn" id="serPng">Save strip PNG</button>
+          <button type="button" class="btn" id="serClear">Clear</button>
+        </div>
+        <p class="hint">A series is a quick consistency check: add each finished release and look at the Series preview. It is stored in this browser and travels in release.json.</p>
+      </div>
+    </details>
+  </aside>
+</main>
+
+<script src="shared/press.js"></script>
+<script src="shared/sleeve-render.js"></script>
+<script src="shared/tracklist-render.js"></script>
+<script>
+(() => {
+"use strict";
+const $ = SP.$, SR = SleeveRender, TR = TracklistRender;
+SP.mountNav("release-kit.html");
+
+let image = null, which = "cover";
+const state = () => SR.flatten(SP.get());
+const cat = () => SP.safeName(SP.get().release.catalog || "release");
+const mk = (w, h) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; };
+const rgb = SP.hexToRgb;
+
+/* ---------- compositions ---------- */
+async function cover(size) { const c = mk(size, size); await SR.render(c, state(), image); return c; }
+async function back(size) { const [w, h] = TR.dims(TR.settings(SP.get()).layout, size); const c = mk(w, h); await TR.render(c, SP.get(), image); return c; }
+function fit(ctx, text, maxW, size, track) { const w = SR.measureTracked(ctx, text, track, size); return w > maxW ? size * maxW / w : size; }
+
+async function banner(W = 1500, H = 500) {
+  const st = state(), c = mk(W, H), ctx = c.getContext("2d");
+  await SR.loadFont(st.font);
+  const bg = rgb(st.bg), ink = rgb(st.ink), spot = rgb(st.accent), face = SR.faceStack(st.font), wt = (w) => SR.weightFor(st.font, w);
+  ctx.fillStyle = SP.rgba(bg, 1); ctx.fillRect(0, 0, W, H);
+  const pad = H * 0.1, cs = H - pad * 2;
+  ctx.drawImage(await cover(Math.round(cs * 2)), pad, pad, cs, cs);
+  SR.applyVignette(ctx, W, H, st, bg, ink);
+  const x = pad * 2 + cs, maxW = W - x - pad * 1.6;
+  ctx.textBaseline = "alphabetic"; ctx.fillStyle = SP.rgba(ink, 1);
+  let as = H * 0.05; ctx.font = `${wt("700")} ${as}px ${face}`; as = fit(ctx, st.artist.toUpperCase(), maxW, as, 0.32);
+  ctx.font = `${wt("700")} ${as}px ${face}`; SR.drawTracked(ctx, st.artist.toUpperCase(), x, pad + H * 0.07, 0.32, as);
+  const lines = st.title.split("\n").map(s => s.trim()).filter(Boolean).map(s => s.toUpperCase());
+  let ts = H * 0.2; ctx.font = `${wt("700")} ${ts}px ${face}`;
+  ts = Math.min(ts, ...lines.map(l => fit(ctx, l, maxW, ts, -0.01)), (H * 0.5) / Math.max(1, lines.length * 0.9));
+  ctx.font = `${wt("700")} ${ts}px ${face}`;
+  const blockH = ts * 0.885 * (lines.length - 1), baseY = H / 2 + blockH / 2 + ts * 0.34 + H * 0.02;
+  lines.forEach((l, i) => { ctx.fillStyle = st.titleAccent && i === lines.length - 1 ? SP.rgba(spot, 1) : SP.rgba(ink, 1); SR.drawTracked(ctx, l, x, baseY - (lines.length - 1 - i) * ts * 0.885, -0.01, ts); });
+  const info = [st.catalog, SP.get().release.format, st.year].filter(Boolean).join("  ·  ").toUpperCase();
+  if (info) { let is = H * 0.034; ctx.font = `${wt("600")} ${is}px ${face}`; is = fit(ctx, info, maxW, is, 0.25); ctx.font = `${wt("600")} ${is}px ${face}`; ctx.fillStyle = SP.rgba(ink, 0.6); SR.drawTracked(ctx, info, x, H - pad, 0.25, is); }
+  if (st.frame) { ctx.strokeStyle = SP.rgba(ink, 0.14); ctx.lineWidth = Math.max(1, H * 0.0025); ctx.strokeRect(H * 0.03, H * 0.03, W - H * 0.06, H - H * 0.06); }
+  SR.applyGrain(ctx, W, H, st.grain, H * 0.5);
+  return c;
+}
+async function social(W = 1080, H = 1350) {
+  const st = state(), c = mk(W, H), ctx = c.getContext("2d");
+  await SR.loadFont(st.font);
+  const bg = rgb(st.bg), ink = rgb(st.ink), spot = rgb(st.accent), face = SR.faceStack(st.font), wt = (w) => SR.weightFor(st.font, w);
+  ctx.fillStyle = SP.rgba(bg, 1); ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(await cover(W * 2), 0, 0, W, W);
+  const bandTop = W, bandH = H - W, X = W * 0.075, maxW = W - X * 2;
+  ctx.textBaseline = "alphabetic";
+  let as = W * 0.026; ctx.font = `${wt("700")} ${as}px ${face}`; as = fit(ctx, st.artist.toUpperCase(), maxW, as, 0.32);
+  ctx.font = `${wt("700")} ${as}px ${face}`; ctx.fillStyle = SP.rgba(ink, 1); SR.drawTracked(ctx, st.artist.toUpperCase(), X, bandTop + bandH * 0.3, 0.32, as);
+  const title = st.title.split("\n").map(s => s.trim()).filter(Boolean).join(" ").toUpperCase();
+  let ts = W * 0.075; ctx.font = `${wt("700")} ${ts}px ${face}`; ts = fit(ctx, title, maxW, ts, -0.01);
+  ctx.font = `${wt("700")} ${ts}px ${face}`; SR.drawTracked(ctx, title, X, bandTop + bandH * 0.3 + ts * 1.25, -0.01, ts);
+  const info = [st.catalog, SP.get().release.format, st.year].filter(Boolean).join("  ·  ").toUpperCase();
+  if (info) { let is = W * 0.0165; ctx.font = `${wt("600")} ${is}px ${face}`; is = fit(ctx, info, maxW, is, 0.25); ctx.font = `${wt("600")} ${is}px ${face}`; ctx.fillStyle = SP.rgba(ink, 0.6); SR.drawTracked(ctx, info, X, H - bandH * 0.16, 0.25, is); }
+  SR.applyVignette(ctx, W, H, { vignette: Math.round(st.vignette * 0.5) }, bg, ink);
+  SR.applyGrain(ctx, W, H, st.grain * 0.8, W);
+  return c;
+}
+
+/* ---------- series ---------- */
+const thumbs = new Map();
+function thumb(url) { if (!thumbs.has(url)) thumbs.set(url, new Promise(res => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = url; })); return thumbs.get(url); }
+const series = () => SP.get().kit.series || [];
+async function seriesStrip(maxW = 2400) {
+  const st = state(), items = [...series()];
+  const cur = { catalog: st.catalog, artist: st.artist, title: st.title, current: true, pal: { bg: st.bg, ink: st.ink, accent: st.accent } };
+  const idx = items.findIndex(s => s.catalog && s.catalog === st.catalog);
+  if (idx < 0) items.push({ ...cur, thumbCanvas: await cover(480) }); else items[idx] = { ...items[idx], current: true };
+  items.sort((a, b) => String(a.catalog).localeCompare(String(b.catalog), undefined, { numeric: true }));
+  const cols = Math.min(items.length, 6), rows = Math.ceil(items.length / cols), gap = 40, cs = Math.min(520, Math.floor((maxW - gap * (cols + 1)) / cols)), labelH = 90;
+  const W = gap * (cols + 1) + cs * cols, H = gap + rows * (cs + labelH) + gap * 0.5;
+  const c = mk(W, H), ctx = c.getContext("2d"); ctx.fillStyle = "#16140f"; ctx.fillRect(0, 0, W, H);
+  await SR.loadFont(st.font); const face = SR.faceStack(st.font);
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i], x = gap + (i % cols) * (cs + gap), y = gap + Math.floor(i / cols) * (cs + labelH);
+    const img = it.thumbCanvas || await thumb(it.thumb);
+    if (img) ctx.drawImage(img, x, y, cs, cs);
+    ctx.textBaseline = "alphabetic"; ctx.fillStyle = it.current ? "#e9e2d4" : "#a79e8d";
+    const fs = cs * 0.045; ctx.font = `600 ${fs}px ${face}`; SR.drawTracked(ctx, String(it.catalog || "—").toUpperCase(), x, y + cs + fs * 2, 0.22, fs);
+    ctx.fillStyle = "#6f685b"; ctx.font = `600 ${fs * 0.85}px ${face}`;
+    const t = String(it.title || "").replace(/\s*\n\s*/g, " ").toUpperCase(); let tt = t; while (tt.length > 3 && SR.measureTracked(ctx, tt, 0.14, fs * 0.85) > cs) tt = tt.slice(0, -2) + "…";
+    SR.drawTracked(ctx, tt, x, y + cs + fs * 3.5, 0.14, fs * 0.85);
+  }
+  return c;
+}
+async function addToSeries() {
+  const st = state(), c = await cover(480), url = c.toDataURL("image/jpeg", 0.82);
+  const item = { catalog: st.catalog, artist: st.artist, title: st.title, pal: { bg: st.bg, ink: st.ink, accent: st.accent }, thumb: url };
+  const list = series().filter(s => !(s.catalog && s.catalog === st.catalog)); list.push(item);
+  SP.patch("kit", { series: list }); SP.toast(`Added ${st.catalog || "release"} to the series`);
+}
+
+/* ---------- text outputs ---------- */
+function styleText() {
+  const s = SP.get().style, r = SP.get().release;
+  if (!s.prompt) return "No style prompt yet. Build one in Style Forge.\n";
+  const out = [`STYLE\n${s.prompt}`, `EXCLUDE\n${s.exclude || "—"}`, `STRUCTURE\n${s.structure || ""}`];
+  if ((s.batch || []).length) out.push("PER TRACK\n" + s.batch.map(b => `${String(b.n).padStart(2, "0")} ${b.title}\n${b.prompt}`).join("\n\n"));
+  return `${SP.titleLine(r)} — ${r.artist}\n\n` + out.join("\n\n") + "\n";
+}
+const cssText = () => { const p = SP.get().palette; return `:root {\n  --ground: ${p.bg};\n  --ink: ${p.ink};\n  --spot: ${p.accent};\n}\n/* ${p.words || p.name || ""} */\n`; };
+
+/* ---------- output registry ---------- */
+const OUTS = [
+  { id: "cover3000", label: "Cover 3000 px", sub: "square PNG, full size", file: () => SR.filename(state(), 3000), make: async () => SP.canvasBlob(await cover(3000)), on: true },
+  { id: "cover1400", label: "Cover 1400 px", sub: "square PNG", file: () => SR.filename(state(), 1400), make: async () => SP.canvasBlob(await cover(1400)), on: true },
+  { id: "thumb640", label: "Thumbnail 640 px", sub: "square JPEG", file: () => SR.filename(state(), 640).replace(/\.png$/, ".jpg"), make: async () => SP.canvasBlob(await cover(640), "image/jpeg", 0.9), on: true },
+  { id: "back3000", label: "Back sleeve", sub: "from Tracklist, 3000 px", file: () => SR.filename(state(), 3000, "back"), make: async () => SP.canvasBlob(await back(3000)), on: true, needs: "tracks" },
+  { id: "banner", label: "Banner 1500×500", sub: "3:1 PNG", file: () => SR.filename(state(), "1500x500", "banner"), make: async () => SP.canvasBlob(await banner()), on: true },
+  { id: "social", label: "Social 1080×1350", sub: "4:5 PNG", file: () => SR.filename(state(), "1080x1350", "social"), make: async () => SP.canvasBlob(await social()), on: true },
+  { id: "series", label: "Series strip", sub: "PNG, from the series list", file: () => `${cat()}_series.png`, make: async () => SP.canvasBlob(await seriesStrip()), on: false },
+  { id: "tracklist", label: "Tracklist", sub: "plain text and markdown", multi: true, files: () => [[`${cat()}_tracklist.txt`, TR.toText(SP.get(), "plain")], [`${cat()}_tracklist.md`, TR.toText(SP.get(), "md")], [`${cat()}_tracklist.csv`, TR.toText(SP.get(), "csv")]], on: true, needs: "tracks" },
+  { id: "style", label: "Suno prompts", sub: "style, exclude, structure, per track", file: () => `${cat()}_suno_prompts.txt`, text: styleText, on: true },
+  { id: "palette", label: "Palette", sub: "CSS variables", file: () => `${cat()}_palette.css`, text: cssText, on: true },
+  { id: "json", label: "release.json", sub: "the whole record, cover image included", file: () => `${cat()}_release.json`, make: async () => new Blob([JSON.stringify(await SP.exportObject(true), null, 2)], { type: "application/json" }), on: true },
+];
+let picked = new Set((SP.get().kit.sizes || OUTS.filter(o => o.on).map(o => o.id)));
+const saveSel = () => SP.patch("kit", { sizes: [...picked] });
+const blobOf = async (o) => o.make ? o.make() : new Blob([o.text()], { type: "text/plain" });
+
+function renderList() {
+  const host = $("outlist"); host.innerHTML = "";
+  OUTS.forEach(o => {
+    const row = document.createElement("div"); row.className = "o";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = picked.has(o.id); cb.setAttribute("aria-label", `Include ${o.label}`);
+    cb.addEventListener("change", () => { cb.checked ? picked.add(o.id) : picked.delete(o.id); saveSel(); });
+    const n = document.createElement("div"); n.className = "n"; n.innerHTML = `${o.label}<small>${o.sub}</small>`;
+    const b = document.createElement("button"); b.type = "button"; b.className = "btn small"; b.textContent = "Save";
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        if (o.multi) { for (const [name, txt] of o.files()) SP.download(txt, name, "text/plain"); }
+        else SP.download(await blobOf(o), o.file());
+      } catch (e) { console.error(e); SP.toast("Couldn't build that file."); }
+      b.disabled = false;
+    });
+    row.append(cb, n, b); host.appendChild(row);
+  });
+}
+$("allOn").addEventListener("click", () => { picked = new Set(OUTS.map(o => o.id)); saveSel(); renderList(); });
+$("allOff").addEventListener("click", () => { picked = new Set(); saveSel(); renderList(); });
+
+/* ---------- zip (store-only) ---------- */
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function makeZip(files) {
+  const enc = new TextEncoder(), parts = [], central = []; let off = 0;
+  const d = new Date(), dt = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)), dd = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate());
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.data), size = f.data.length;
+    const lh = new DataView(new ArrayBuffer(30)); lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
+    lh.setUint16(10, dt, true); lh.setUint16(12, dd, true); lh.setUint32(14, crc, true); lh.setUint32(18, size, true); lh.setUint32(22, size, true); lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    parts.push(new Uint8Array(lh.buffer), name, f.data);
+    const ch = new DataView(new ArrayBuffer(46)); ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true);
+    ch.setUint16(12, dt, true); ch.setUint16(14, dd, true); ch.setUint32(16, crc, true); ch.setUint32(20, size, true); ch.setUint32(24, size, true); ch.setUint16(28, name.length, true);
+    ch.setUint32(42, off, true); central.push(new Uint8Array(ch.buffer), name);
+    off += 30 + name.length + size;
+  }
+  const cSize = central.reduce((a, b) => a + b.length, 0);
+  const end = new DataView(new ArrayBuffer(22)); end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, cSize, true); end.setUint32(16, off, true);
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: "application/zip" });
+}
+$("zipBtn").addEventListener("click", async () => {
+  const btn = $("zipBtn"), sel = OUTS.filter(o => picked.has(o.id));
+  if (!sel.length) return SP.toast("Tick at least one file.");
+  btn.disabled = true; const files = [], made = [];
+  try {
+    for (let i = 0; i < sel.length; i++) {
+      const o = sel[i]; btn.textContent = `Building ${i + 1} / ${sel.length}…`; $("zipHint").textContent = o.label;
+      await new Promise(r => setTimeout(r, 20));
+      if (o.multi) { for (const [name, txt] of o.files()) { files.push({ name, data: new TextEncoder().encode(txt) }); made.push(name); } }
+      else { const b = await blobOf(o); files.push({ name: o.file(), data: new Uint8Array(await b.arrayBuffer()) }); made.push(o.file()); }
+    }
+    const r = SP.get().release, p = SP.get().palette;
+    files.push({ name: `${cat()}_manifest.json`, data: new TextEncoder().encode(JSON.stringify({ schema: "sleevepress.kit/1", generated: new Date().toISOString(), release: r, palette: { bg: p.bg, ink: p.ink, accent: p.accent, words: p.words }, tracks: SP.get().tracks.length, files: made }, null, 2)) });
+    SP.download(makeZip(files), `${cat()}_release-kit.zip`); SP.toast(`Kit ready: ${files.length} files`);
+  } catch (e) { console.error(e); SP.toast("Couldn't build the kit."); }
+  btn.disabled = false; btn.textContent = "Download kit (.zip)"; $("zipHint").textContent = "The zip is built in your browser. Nothing is uploaded.";
+});
+
+/* ---------- preflight ---------- */
+function preflight() {
+  const d = SP.get(), r = d.release, p = d.palette, st = state(), items = [];
+  const add = (lvl, txt) => items.push([lvl, txt]);
+  r.artist.trim() ? add("ok", "Artist set") : add("bad", "No artist name");
+  SP.titleLine(r) ? add("ok", "Title set") : add("bad", "No title");
+  r.catalog.trim() ? add("ok", `Catalogue ${r.catalog}`) : add("warn", "No catalogue number, so files are named “release”");
+  const cr = SP.contrast(rgb(p.ink), rgb(p.bg)); cr >= 4.5 ? add("ok", `Ink on ground ${cr.toFixed(1)}:1`) : add("bad", `Ink on ground only ${cr.toFixed(1)}:1`);
+  const sc = SP.contrast(rgb(p.accent), rgb(p.bg)); sc >= 3 ? add("ok", `Spot on ground ${sc.toFixed(1)}:1`) : add("warn", `Spot on ground only ${sc.toFixed(1)}:1`);
+  image ? add("ok", "Cover image attached") : add("warn", "No cover image; sleeves will be type only");
+  d.tracks.length ? add("ok", `${d.tracks.length} tracks`) : add("warn", "No tracks, so the back sleeve is empty");
+  d.tracks.length && d.tracks.some(t => !t.length) ? add("warn", "Some tracks have no length") : null;
+  d.style.prompt ? add("ok", "Style prompt built") : add("warn", "No Suno style prompt yet");
+  if (st.barcode) { const dg = SR.eanDigits(st); add("ok", `Barcode ${dg}`); }
+  const host = $("checks"); host.innerHTML = "";
+  items.filter(Boolean).forEach(([l, t]) => { const e = document.createElement("div"); e.className = "chk " + l; e.innerHTML = `<b>${l === "ok" ? "OK" : l === "warn" ? "CHECK" : "FIX"}</b><span></span>`; e.querySelector("span").textContent = t; host.appendChild(e); });
+  const bad = items.filter(i => i && i[0] === "bad").length, warn = items.filter(i => i && i[0] === "warn").length;
+  $("readyOut").textContent = bad ? `${bad} to fix` : warn ? `${warn} to check` : "ready";
+}
+
+/* ---------- preview ---------- */
+const queue = SP.rafOnce(async () => {
+  const pv = $("preview"); let src, name, dim;
+  try {
+    if (which === "cover") { src = await cover(1000); name = SR.filename(state(), 3000); }
+    else if (which === "back") { src = await back(1000); name = SR.filename(state(), 3000, "back"); }
+    else if (which === "banner") { src = await banner(); name = SR.filename(state(), "1500x500", "banner"); }
+    else if (which === "social") { src = await social(); name = SR.filename(state(), "1080x1350", "social"); }
+    else { src = await seriesStrip(1600); name = `${cat()}_series.png`; }
+    pv.width = src.width; pv.height = src.height; pv.getContext("2d").drawImage(src, 0, 0);
+    $("dimOut").textContent = `${src.width}×${src.height} preview`; $("fileOut").textContent = name;
+  } catch (e) { console.error(e); }
+});
+SP.bindSeg($("which"), () => which, v => { which = v; queue(); });
+
+function renderSeries() {
+  const host = $("series"); host.innerHTML = ""; const list = series();
+  $("serCount").textContent = list.length || "";
+  list.forEach((s, i) => {
+    const d = document.createElement("div"); d.className = "s";
+    d.innerHTML = `<img alt=""><span></span><button type="button">remove</button>`; d.querySelector("img").src = s.thumb;
+    d.querySelector("span").textContent = s.catalog || "—";
+    d.querySelector("button").addEventListener("click", () => { SP.patch("kit", { series: series().filter((_, k) => k !== i) }); });
+    host.appendChild(d);
+  });
+}
+$("serAdd").addEventListener("click", addToSeries);
+$("serClear").addEventListener("click", () => SP.patch("kit", { series: [] }));
+$("serPng").addEventListener("click", async () => SP.download(await SP.canvasBlob(await seriesStrip()), `${cat()}_series.png`));
+
+function all() { renderSeries(); preflight(); queue(); }
+SP.on(all);
+SP.onImage(async () => { image = await SP.image(); all(); });
+(async () => { image = await SP.image(); renderList(); all(); document.fonts?.ready?.then(queue); })();
+})();
+</script>
+</body>
+</html>

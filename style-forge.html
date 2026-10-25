@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Style Forge · Sleeve Press</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/press.css">
+<style>
+.main { min-width: 0; display: grid; gap: 16px; }
+.variants { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.var { border: 1px solid var(--rule); background: var(--room); padding: 10px; display: grid; gap: 8px; font: 12px/1.5 var(--f-mono); color: var(--chalk-dim); min-width: 0; }
+.var .p { overflow-wrap: anywhere; color: var(--chalk); }
+.var .a { display: flex; gap: 6px; align-items: center; }
+.var .a span { margin-left: auto; color: var(--chalk-faint); font-size: 10px; }
+.batch { display: grid; gap: 8px; }
+.batch .it { border: 1px solid var(--rule); background: var(--room); padding: 8px 10px; display: grid; gap: 4px; }
+.batch .it b { font-size: 13px; }
+.batch .it .p { font: 12px/1.5 var(--f-mono); color: var(--chalk-dim); overflow-wrap: anywhere; }
+.batch .it .a { display: flex; gap: 6px; align-items: center; }
+.fh { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.fh .legend { flex: 1; }
+.mini { font: 11px var(--f-mono); color: var(--chalk-faint); }
+</style>
+</head>
+<body>
+<div id="sp-nav"></div>
+
+<div class="page-head">
+  <h1>Style Forge</h1>
+  <p>Build Suno style prompts from toggles so every track on a release has the same shape. Lock the fields you want fixed, shuffle the rest with a seed, and trim to your model’s character limit. Tempo and key come from the tracklist for per-track prompts.</p>
+</div>
+
+<main class="studio">
+  <div class="main">
+    <section class="panel" aria-label="Style prompt">
+      <h2>Style prompt <small id="lenOut"></small></h2>
+      <div class="out" id="styleOut" aria-live="polite"></div>
+      <p class="hint" id="trimNote"></p>
+      <div class="btn-row">
+        <button type="button" class="btn primary" id="copyStyle">Copy style</button>
+        <button type="button" class="btn" id="shuffle">Shuffle unlocked</button>
+        <button type="button" class="btn" id="prevSeed" aria-label="Previous seed">←</button>
+        <span class="mini" style="align-self:center">seed <b id="seedOut"></b></span>
+        <button type="button" class="btn" id="nextSeed" aria-label="Next seed">→</button>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Exclude styles">
+      <h2>Exclude styles <small id="exLen"></small></h2>
+      <div class="out" id="excludeOut"></div>
+      <div class="btn-row"><button type="button" class="btn" id="copyEx">Copy exclude</button></div>
+    </section>
+
+    <section class="panel" aria-label="Structure">
+      <h2>Lyrics-box structure <small>meta tags</small></h2>
+      <div class="seg" id="structure" role="group" aria-label="Structure template">
+        <button type="button" data-v="club">Club / drop</button>
+        <button type="button" data-v="song">Song</button>
+        <button type="button" data-v="dub">Dub version</button>
+        <button type="button" data-v="loop">Short loop</button>
+      </div>
+      <div class="out" id="structOut"></div>
+      <div class="btn-row"><button type="button" class="btn" id="copyStruct">Copy structure</button></div>
+    </section>
+
+    <section class="panel" aria-label="Variations">
+      <h2>Variations <small>same locks, other seeds</small></h2>
+      <div class="variants" id="variants"></div>
+    </section>
+
+    <section class="panel" aria-label="Per-track prompts">
+      <h2>Per-track prompts <small id="batchCount"></small></h2>
+      <p class="hint" id="batchHint"></p>
+      <div class="batch" id="batch"></div>
+      <div class="btn-row"><button type="button" class="btn" id="copyBatch">Copy all</button><a class="btn" href="tracklist.html">Edit the tracklist →</a></div>
+    </section>
+  </div>
+
+  <aside class="ticket" aria-label="Style settings">
+    <details open>
+      <summary>Genre</summary>
+      <div class="fields">
+        <div class="fh"><span class="legend">Genre</span><button type="button" class="lockbtn" data-lock="genre" aria-pressed="false">lock</button></div>
+        <select id="genre"></select>
+        <label class="f"><span>Shuffle within</span>
+          <select id="family"><option value="any">Everything</option></select></label>
+        <div class="fh"><span class="legend">Sub-genre</span><button type="button" class="lockbtn" data-lock="sub" aria-pressed="false">lock</button></div>
+        <div class="chips" id="subChips"></div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Tempo, key, era</summary>
+      <div class="fields">
+        <div class="fh"><span class="legend">Tempo</span><label class="check" style="gap:6px"><input type="checkbox" id="bpmOn"> in prompt</label><button type="button" class="lockbtn" data-lock="bpm" aria-pressed="false">lock</button></div>
+        <label class="f"><span>BPM <output id="bpmOut"></output></span><input type="range" id="bpm" min="60" max="190" step="1"></label>
+        <label class="f"><span>Key <output>optional · per-track key overrides</output></span>
+          <select id="key"><option value="">None</option></select></label>
+        <div class="fh"><span class="legend">Era</span><button type="button" class="lockbtn" data-lock="era" aria-pressed="false">lock</button></div>
+        <div class="chips" id="eraChips"></div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Mood</summary>
+      <div class="fields">
+        <div class="fh"><span class="legend">Pick any</span><button type="button" class="lockbtn" data-lock="mood" aria-pressed="false">lock</button></div>
+        <div class="chips" id="moodChips"></div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Instruments</summary>
+      <div class="fields">
+        <div class="fh"><span class="legend">Pick any</span><button type="button" class="lockbtn" data-lock="inst" aria-pressed="false">lock</button></div>
+        <div class="chips" id="instChips"></div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Vocals</summary>
+      <div class="fields">
+        <div class="fh"><span class="legend">Voice</span><button type="button" class="lockbtn" data-lock="vocals" aria-pressed="false">lock</button></div>
+        <div class="chips" id="vocalChips"></div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Production</summary>
+      <div class="fields">
+        <div class="fh"><span class="legend">Pick any</span><button type="button" class="lockbtn" data-lock="prod" aria-pressed="false">lock</button></div>
+        <div class="chips" id="prodChips"></div>
+        <label class="f"><span>Your own tags <output>comma separated, always kept</output></span><input type="text" id="extra" placeholder="e.g. 1am, rain on the window"></label>
+      </div>
+    </details>
+
+    <details>
+      <summary>Exclude</summary>
+      <div class="fields">
+        <div class="chips" id="exChips"></div>
+        <label class="f"><span>More <output>comma separated</output></span><input type="text" id="exText" placeholder="e.g. whistling, kazoo"></label>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Limit and order</summary>
+      <div class="fields">
+        <label class="f"><span>Style character limit <output>set it for your Suno model</output></span>
+          <select id="limit"><option value="120">120 (older models)</option><option value="200">200</option><option value="1000">1000</option><option value="3000">3000</option></select></label>
+        <label class="check"><input type="checkbox" id="trim"> Trim lowest-priority tags to fit</label>
+        <div class="seg" id="order" role="group" aria-label="Tag order">
+          <button type="button" data-v="genre">Genre first</button>
+          <button type="button" data-v="mood">Mood first</button>
+          <button type="button" data-v="inst">Instruments first</button>
+        </div>
+        <p class="hint">Suno’s limit varies by model and changes over time; check yours and set it here. Trimming drops production, then era, key, mood and instruments, and never the genre.</p>
+      </div>
+    </details>
+  </aside>
+</main>
+
+<script src="shared/press.js"></script>
+<script>
+(() => {
+"use strict";
+const $ = SP.$;
+SP.mountNav("style-forge.html");
+
+/* ---------- the banks ---------- */
+const L = (s) => s.split(",").map(x => x.trim()).filter(Boolean);
+const G = (id, fam, bpm, sub, inst, mood, prod, vocals) => ({ id, fam, bpm, sub: L(sub), inst: L(inst), mood: L(mood), prod: L(prod), vocals: L(vocals) });
+const GENRES = [
+  G("drum and bass", "Bass music", [170, 176], "liquid, neurofunk, jump up, atmospheric, minimal, techstep, rollers", "reese bass, amen breaks, sub bass, rhodes, pads, filtered stabs, strings", "rolling, dark, euphoric, melancholic, hypnotic, driving", "tight punchy drums, deep sub, wide pads, sidechained, clean mix", "instrumental, female vocals, male vocals, soulful"),
+  G("jungle", "Bass music", [160, 172], "old school, ragga jungle, atmospheric, dark, rolling", "chopped amen breaks, sub bass, pads, stabs, dub siren, vinyl hiss", "dark, raw, smoky, nostalgic, driving", "dusty, vinyl crackle, raw, analog warmth", "instrumental, chanted vocals, male vocals"),
+  G("dubstep", "Bass music", [138, 142], "deep dubstep, melodic, half-time, sparse, 140", "sub bass, wobble bass, half-time drums, sparse percussion, pads, dub chords", "dark, spacious, tense, hypnotic, brooding", "deep sub, wide stereo, heavy low end, reverb tails", "instrumental, whispered, female vocals"),
+  G("drumstep", "Bass music", [168, 176], "melodic, hybrid, heavy, festival", "half-time drop, sub bass, supersaws, snare rolls, big pads, riser", "euphoric, uplifting, energetic, epic", "big drop, sidechained, wide stereo, polished", "instrumental, female vocals, male vocals"),
+  G("riddim", "Bass music", [138, 142], "minimal riddim, heavy, tearout", "growl bass, sparse drums, sub, rimshots, vocal chops", "aggressive, menacing, tense", "heavy low end, tight drums, loud master", "instrumental, chopped vocals"),
+  G("reggae", "Reggae family", [70, 90], "roots, one drop, rocksteady, steppers, modern roots", "one drop drums, offbeat guitar skank, bubbling organ, deep bass, horns, rimshot", "warm, laid-back, soulful, spiritual, sunlit", "analog warmth, tape saturation, spring reverb, live band feel", "male vocals, female vocals, harmonies, instrumental, melodic chant"),
+  G("lovers rock", "Reggae family", [64, 80], "UK lovers rock, soul reggae, smooth", "warm bass, rhodes, offbeat guitar, soft strings, brushed drums, sax", "romantic, tender, smooth, late-night, dreamy", "analog warmth, soft reverb, warm tape", "female vocals, male vocals, harmonies, falsetto"),
+  G("dub", "Reggae family", [64, 82], "roots dub, dub techno, steppers dub, echo chamber", "echo delay, spring reverb, deep bass, sparse drums, melodica, mixing desk effects, skank", "spacious, hypnotic, smoky, meditative", "heavy echo, tape delay, deep low end, analog desk", "instrumental, vocal fragments"),
+  G("dancehall", "Reggae family", [90, 105], "modern dancehall, digital, 90s dancehall", "digital riddim, punchy kick, synth stabs, sub bass, claps", "energetic, bouncy, confident, sunlit", "clean mix, punchy drums, loud master", "male vocals, female vocals, toasting, chanted vocals"),
+  G("future bass", "Electronic", [128, 160], "melodic, kawaii, chill, festival", "supersaws, pitched vocal chops, sidechained chords, claps, pluck lead", "euphoric, uplifting, dreamy, bright, emotional", "wide stereo, sidechain pump, polished, shimmering", "female vocals, chopped vocals, instrumental"),
+  G("UK garage", "Electronic", [128, 134], "2-step, speed garage, dark garage, bassline", "skippy drums, swung hats, sub bass, chopped vocals, organ stabs, pads", "late-night, groovy, moody, smooth", "crisp mix, swing, warm sub, lo-fi texture", "female vocals, chopped vocals, instrumental, male vocals"),
+  G("house", "Electronic", [120, 128], "deep house, soulful house, piano house, afro house, tech house", "four-on-the-floor kick, offbeat hats, piano chords, bassline, pads, claps", "groovy, warm, uplifting, sunlit, hypnotic", "clean mix, warm low end, sidechained, analog warmth", "female vocals, soulful, instrumental, chanted vocals"),
+  G("techno", "Electronic", [124, 140], "dub techno, minimal, melodic, industrial, peak time", "driving kick, rumble bass, hi-hat loops, modular synth, metallic percussion, pads", "hypnotic, dark, tense, relentless, cold", "raw, saturated, wide reverb, analog", "instrumental"),
+  G("trap", "Hip hop", [130, 150], "dark trap, melodic trap, cloud rap, drill", "808 bass, rolling hi-hats, snare, dark pads, bells, vocal ad-libs", "dark, moody, menacing, melodic, cold", "heavy 808, crisp hats, loud master", "rap, male vocals, ad-libs, autotune"),
+  G("boom bap", "Hip hop", [84, 96], "jazzy, 90s, underground, soul sample feel", "dusty drums, upright bass, rhodes, vinyl scratches, horn stabs, piano loop", "gritty, nostalgic, laid-back, smoky", "vinyl crackle, dusty, MPC swing, lo-fi texture", "rap, male vocals, instrumental"),
+  G("lo-fi hip hop", "Hip hop", [68, 90], "chillhop, jazzy, study beats, rainy", "mellow keys, dusty drums, warm bass, vinyl noise, soft guitar, tape wobble", "cozy, hazy, mellow, nostalgic, sleepy", "tape saturation, vinyl crackle, lo-fi texture, warm", "instrumental, vocal samples"),
+  G("ambient", "Textural", [50, 90], "dark ambient, drone, cinematic, new age, field recordings", "evolving pads, drones, granular textures, piano, field recordings, soft bells", "spacious, meditative, ethereal, calm, vast", "long reverb, wide stereo, soft dynamics, analog warmth", "instrumental, wordless vocals, whispered"),
+  G("synthwave", "Retro", [96, 120], "outrun, darksynth, dreamwave, retrowave", "analog synths, gated reverb drums, arpeggios, bass pulse, lead synth", "nostalgic, neon, driving, cinematic, dreamy", "gated reverb, chorus, 80s, wide stereo", "instrumental, female vocals, male vocals"),
+  G("indie rock", "Band", [108, 140], "jangly, post-punk, garage, dream pop, shoegaze", "clean electric guitar, driving bass, live drums, reverb guitar, organ", "restless, wistful, energetic, hazy, earnest", "live band feel, analog warmth, raw, room reverb", "male vocals, female vocals, harmonies, instrumental"),
+  G("folk", "Band", [72, 120], "acoustic, folk-pop, stomp and holler, fingerstyle, pastoral", "acoustic guitar, upright bass, fiddle, soft percussion, banjo, harmonium", "warm, wistful, earthy, intimate, pastoral", "close mic, room sound, warm, natural dynamics", "male vocals, female vocals, harmonies, choir"),
+  G("soul", "Band", [64, 110], "neo soul, 70s soul, southern soul, northern soul", "rhodes, warm bass, live drums, horns, strings, clean guitar", "soulful, warm, smooth, heartfelt, groovy", "analog warmth, tape saturation, live band feel", "female vocals, male vocals, harmonies, falsetto"),
+  G("funk", "Band", [95, 118], "p-funk, disco funk, boogie, jazz funk", "slap bass, wah guitar, clavinet, tight drums, horn section, congas", "groovy, playful, sunlit, confident", "tight pocket, dry drums, analog warmth, live band feel", "male vocals, female vocals, chanted vocals, instrumental"),
+  G("pop", "Pop", [96, 126], "synth-pop, electropop, dance-pop, indie pop", "punchy drums, bright synths, bass, claps, plucks, vocal stacks", "uplifting, catchy, bright, emotional, sunlit", "polished, wide stereo, crisp mix, loud master", "female vocals, male vocals, harmonies, duet"),
+  G("cinematic", "Textural", [60, 130], "orchestral, trailer, epic, scoring, hybrid", "strings, brass, taiko drums, piano, choir, braams, sub drops", "epic, tense, emotional, vast, heroic", "wide stage, big dynamics, long reverb, polished", "instrumental, choir, wordless vocals"),
+];
+const GBY = Object.fromEntries(GENRES.map(g => [g.id, g]));
+const FAMILIES = [...new Set(GENRES.map(g => g.fam))];
+const ERAS = L("70s, 80s, 90s, early 2000s, 2010s, modern");
+const MOODS = L("warm, dark, hypnotic, euphoric, melancholic, spiritual, nostalgic, aggressive, dreamy, laid-back, tense, uplifting, moody, smoky, hazy, sunlit, spacious, romantic, gritty, cinematic");
+const PRODS = L("analog warmth, tape saturation, crisp mix, lo-fi texture, wide stereo, deep sub, vinyl crackle, spring reverb, punchy drums, clean master, dusty, raw");
+const VOCALS = L("instrumental, male vocals, female vocals, duet, harmonies, choir, rap, spoken word, whispered, soulful, raspy, chanted vocals, chopped vocals, falsetto, ad-libs, toasting, wordless vocals");
+const EXCLUDES = L("vocals, autotune, guitar, piano, drums, trap hi-hats, EDM drop, pop, country, metal, screaming, rap, choir, orchestra, 808, distortion");
+const KEYS = []; ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"].forEach(n => { KEYS.push(n + " minor"); KEYS.push(n + " major"); });
+const STRUCT = {
+  club: "[Instrumental]\n[Intro: sparse drums and pads]\n[Build]\n[Drop]\n[Breakdown: pads only]\n[Build]\n[Drop 2: heavier]\n[Outro: stripped drums, fade]",
+  song: "[Intro]\n[Verse 1]\n[Pre-Chorus]\n[Chorus]\n[Verse 2]\n[Pre-Chorus]\n[Chorus]\n[Bridge]\n[Final Chorus]\n[Outro]",
+  dub: "[Instrumental]\n[Intro: drum and bass only]\n[Version: echo on the drums]\n[Drop out: bass and echo]\n[Return: full rhythm]\n[Outro: slow fade into echo]",
+  loop: "[Instrumental]\n[Intro: 4 bars]\n[Main loop]\n[Outro: 4 bars, clean end]",
+};
+
+/* ---------- state ---------- */
+const DEF = {
+  genre: "drum and bass", sub: ["liquid"], bpmOn: true, bpm: 174, key: "", era: "", mood: ["rolling", "warm"],
+  inst: ["reese bass", "amen breaks", "pads"], vocals: ["instrumental"], prod: ["tight punchy drums", "deep sub"], extra: "",
+  exclude: ["vocals"], exText: "", limit: 200, trim: true, order: "genre", structure: "club", family: "any", seed: 1,
+  locks: { genre: false, sub: false, bpm: false, era: false, mood: false, inst: false, vocals: false, prod: false },
+};
+let F = loadForm(SP.get());
+
+/* ---------- composition ---------- */
+function keyTag(k) {
+  if (!k) return "";
+  const m = /^([A-G])([#♯b♭]?)\s*(m|min|minor|maj|major)?$/i.exec(k.trim());
+  if (!m) return k;
+  const acc = m[2] === "#" ? "♯" : m[2] === "b" ? "♭" : m[2];
+  return `${m[1].toUpperCase()}${acc} ${/^m(in|inor)?$/i.test(m[3] || "") && m[3] ? "minor" : "major"}`.replace("♯", "#").replace("♭", "b");
+}
+function blocks(f, over = {}) {
+  const bpm = over.bpm || f.bpm, key = over.key || f.key;
+  const B = {
+    genre: [{ t: f.genre, p: 0 }],
+    sub: f.sub.map(t => ({ t: `${t}`, p: 1 })),
+    mood: f.mood.map(t => ({ t, p: 5 })),
+    tempo: f.bpmOn ? [{ t: `${bpm} bpm`, p: 3 }] : [],
+    key: key ? [{ t: `${keyTag(key)}`, p: 7 }] : [],
+    inst: f.inst.map(t => ({ t, p: 4 })),
+    vocals: f.vocals.map(t => ({ t, p: 2 })),
+    era: f.era ? [{ t: f.era, p: 6 }] : [],
+    prod: f.prod.map(t => ({ t, p: 8 })),
+    extra: L(f.extra).map(t => ({ t, p: 9 })),
+  };
+  const orders = {
+    genre: ["genre", "sub", "mood", "tempo", "key", "inst", "vocals", "era", "prod", "extra"],
+    mood: ["mood", "genre", "sub", "tempo", "key", "inst", "vocals", "era", "prod", "extra"],
+    inst: ["genre", "sub", "inst", "tempo", "key", "mood", "vocals", "era", "prod", "extra"],
+  };
+  return orders[f.order].flatMap(k => B[k]);
+}
+function compose(f, over) {
+  let tags = blocks(f, over), dropped = 0;
+  const join = (a) => a.map(x => x.t).join(", ");
+  if (f.trim) {
+    while (join(tags).length > f.limit && tags.some(x => x.p > 0)) {
+      const worst = Math.max(...tags.map(x => x.p)); const idx = tags.map(x => x.p).lastIndexOf(worst);
+      tags.splice(idx, 1); dropped++;
+    }
+  }
+  return { text: join(tags), dropped };
+}
+function exclusion(f) { return [...f.exclude, ...L(f.exText)].join(", "); }
+
+/* ---------- shuffle ---------- */
+function shuffled(f, seed) {
+  const rnd = SP.mulberry32(seed * 2654435761 >>> 0), pick = (a) => a[Math.floor(rnd() * a.length)];
+  const many = (a, lo, hi) => { const n = lo + Math.floor(rnd() * (hi - lo + 1)); const c = [...a], out = []; while (out.length < n && c.length) out.push(c.splice(Math.floor(rnd() * c.length), 1)[0]); return out; };
+  const o = { ...f, locks: f.locks, sub: [...f.sub], mood: [...f.mood], inst: [...f.inst], vocals: [...f.vocals], prod: [...f.prod], seed };
+  if (!f.locks.genre) { const pool = GENRES.filter(g => f.family === "any" || g.fam === f.family); o.genre = pick(pool).id; }
+  const g = GBY[o.genre];
+  if (!f.locks.genre || !f.locks.sub) { /* sub follows the genre unless locked */ }
+  if (!f.locks.sub) o.sub = many(g.sub, 1, 2);
+  if (!f.locks.bpm) o.bpm = g.bpm[0] + Math.floor(rnd() * (g.bpm[1] - g.bpm[0] + 1));
+  if (!f.locks.era) o.era = rnd() < 0.45 ? pick(ERAS) : "";
+  if (!f.locks.mood) o.mood = many([...g.mood, ...many(MOODS, 2, 3)].filter((v, i, a) => a.indexOf(v) === i), 2, 3);
+  if (!f.locks.inst) o.inst = many(g.inst, 3, 4);
+  if (!f.locks.vocals) o.vocals = [pick(g.vocals)];
+  if (!f.locks.prod) o.prod = many([...g.prod, ...many(PRODS, 1, 2)].filter((v, i, a) => a.indexOf(v) === i), 1, 2);
+  return o;
+}
+
+/* ---------- UI plumbing ---------- */
+let writing = false;
+function save(extra) { writing = true; SP.patch("style", { form: F, ...extra }); writing = false; }
+function loadForm(db) { const f = db.style.form || {}; return { ...DEF, ...f, locks: { ...DEF.locks, ...(f.locks || {}) } }; }
+function chipset(host, items, get, set, cls) {
+  host.innerHTML = "";
+  [...new Set([...items, ...get()])].forEach(t => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip-b" + (cls ? " " + cls : ""); b.textContent = t;
+    b.setAttribute("aria-pressed", String(get().includes(t)));
+    b.addEventListener("click", () => { const cur = get(); set(cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t]); update(); });
+    host.appendChild(b);
+  });
+}
+function single(host, items, get, set) {
+  host.innerHTML = "";
+  items.forEach(t => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip-b"; b.textContent = t; b.setAttribute("aria-pressed", String(get() === t));
+    b.addEventListener("click", () => { set(get() === t ? "" : t); update(); }); host.appendChild(b);
+  });
+}
+function structure() { return STRUCT[F.structure]; }
+const segs = {
+  order: SP.bindSeg($("order"), () => F.order, v => { F.order = v; update(); }),
+  structure: SP.bindSeg($("structure"), () => F.structure, v => { F.structure = v; update(); }),
+};
+
+function update() {
+  const g = GBY[F.genre] || GENRES[0];
+  // genre / family selects
+  if (!$("genre").options.length) GENRES.forEach(x => $("genre").add(new Option(x.id, x.id)));
+  if ($("family").options.length < 2) FAMILIES.forEach(x => $("family").add(new Option(x, x)));
+  if (!$("key").options[1]) KEYS.forEach(k => $("key").add(new Option(k, k)));
+  $("genre").value = F.genre; $("family").value = F.family; $("key").value = F.key; $("limit").value = String(F.limit);
+  if (!$("limit").value) { $("limit").add(new Option(String(F.limit), String(F.limit))); $("limit").value = String(F.limit); }
+  $("bpm").value = F.bpm; $("bpmOut").textContent = F.bpm; $("bpmOn").checked = F.bpmOn; $("trim").checked = F.trim;
+  if (document.activeElement !== $("extra")) $("extra").value = F.extra;
+  if (document.activeElement !== $("exText")) $("exText").value = F.exText;
+  chipset($("subChips"), g.sub, () => F.sub, v => F.sub = v);
+  chipset($("moodChips"), [...g.mood, ...MOODS], () => F.mood, v => F.mood = v);
+  chipset($("instChips"), g.inst, () => F.inst, v => F.inst = v);
+  chipset($("vocalChips"), VOCALS, () => F.vocals, v => F.vocals = v);
+  chipset($("prodChips"), [...g.prod, ...PRODS], () => F.prod, v => F.prod = v);
+  chipset($("exChips"), EXCLUDES, () => F.exclude, v => F.exclude = v, "neg");
+  single($("eraChips"), ERAS, () => F.era, v => F.era = v);
+  document.querySelectorAll("[data-lock]").forEach(b => b.setAttribute("aria-pressed", String(!!F.locks[b.dataset.lock])));
+  segs.order(); segs.structure();
+
+  // outputs
+  const c = compose(F);
+  $("styleOut").textContent = c.text || "—";
+  $("lenOut").textContent = `${c.text.length} / ${F.limit}`;
+  $("lenOut").style.color = c.text.length > F.limit ? "var(--lamp-soft)" : "";
+  $("trimNote").textContent = c.dropped ? `Trimmed ${c.dropped} low-priority tag${c.dropped === 1 ? "" : "s"} to fit ${F.limit} characters.` : (c.text.length > F.limit ? "Over the limit. Turn trimming on, or remove a few tags." : "");
+  $("seedOut").textContent = F.seed;
+  const ex = exclusion(F); $("excludeOut").textContent = ex || "—"; $("exLen").textContent = `${ex.length} chars`;
+  $("structOut").textContent = structure();
+
+  // variations (same locks, other seeds; not applied until chosen)
+  const vh = $("variants"); vh.innerHTML = "";
+  for (let i = 1; i <= 6; i++) {
+    const s = F.seed + i, v = shuffled(F, s), vc = compose(v);
+    const d = document.createElement("div"); d.className = "var";
+    d.innerHTML = `<div class="p"></div><div class="a"><button type="button" class="btn small">Use</button><button type="button" class="btn small">Copy</button><span>seed ${s} · ${vc.text.length}</span></div>`;
+    d.querySelector(".p").textContent = vc.text;
+    const [use, copy] = d.querySelectorAll("button");
+    use.addEventListener("click", () => { F = { ...v, locks: F.locks, family: F.family }; update(); });
+    copy.addEventListener("click", () => SP.copy(vc.text, "style"));
+    vh.appendChild(d);
+  }
+
+  // per-track prompts
+  const tracks = SP.get().tracks, bh = $("batch"); bh.innerHTML = "";
+  const batch = tracks.map((t, i) => ({ n: i + 1, title: t.title + (t.feat ? ` (feat. ${t.feat})` : ""), prompt: compose(F, { bpm: t.bpm, key: t.key }).text }));
+  $("batchCount").textContent = tracks.length ? `${tracks.length} tracks` : "";
+  $("batchHint").textContent = tracks.length ? "BPM and key come from each track when it has them, otherwise from the settings here." : "No tracks yet. Add a tracklist and each track gets its own prompt with its tempo and key.";
+  batch.forEach(b => {
+    const d = document.createElement("div"); d.className = "it";
+    d.innerHTML = `<b></b><div class="p"></div><div class="a"><button type="button" class="btn small">Copy</button></div>`;
+    d.querySelector("b").textContent = `${String(b.n).padStart(2, "0")}  ${b.title}`; d.querySelector(".p").textContent = b.prompt;
+    d.querySelector("button").addEventListener("click", () => SP.copy(b.prompt, "style"));
+    bh.appendChild(d);
+  });
+  save({ prompt: c.text, exclude: ex, structure: structure(), batch, genre: F.genre });
+}
+
+/* ---------- events ---------- */
+$("genre").addEventListener("change", e => {
+  F.genre = e.target.value; const g = GBY[F.genre];
+  F.sub = g.sub.slice(0, 1); F.mood = g.mood.slice(0, 2); F.inst = g.inst.slice(0, 3); F.vocals = [g.vocals[0]]; F.prod = g.prod.slice(0, 2);
+  F.bpm = Math.round((g.bpm[0] + g.bpm[1]) / 2); update();
+});
+$("family").addEventListener("change", e => { F.family = e.target.value; update(); });
+$("bpm").addEventListener("input", e => { F.bpm = +e.target.value; update(); });
+$("bpmOn").addEventListener("change", e => { F.bpmOn = e.target.checked; update(); });
+$("trim").addEventListener("change", e => { F.trim = e.target.checked; update(); });
+$("key").addEventListener("change", e => { F.key = e.target.value; update(); });
+$("limit").addEventListener("change", e => { F.limit = +e.target.value; update(); });
+$("extra").addEventListener("input", e => { F.extra = e.target.value; update(); });
+$("exText").addEventListener("input", e => { F.exText = e.target.value; update(); });
+document.addEventListener("click", e => { const b = e.target.closest("[data-lock]"); if (b) { F.locks[b.dataset.lock] = !F.locks[b.dataset.lock]; update(); } });
+$("shuffle").addEventListener("click", () => { F = shuffled(F, F.seed + 1); update(); });
+$("nextSeed").addEventListener("click", () => { F = shuffled(F, F.seed + 1); update(); });
+$("prevSeed").addEventListener("click", () => { F = shuffled(F, Math.max(1, F.seed - 1)); update(); });
+$("copyStyle").addEventListener("click", () => SP.copy(compose(F).text, "style prompt"));
+$("copyEx").addEventListener("click", () => SP.copy(exclusion(F), "exclude list"));
+$("copyStruct").addEventListener("click", () => SP.copy(structure(), "structure"));
+$("copyBatch").addEventListener("click", () => {
+  const b = SP.get().style.batch || []; if (!b.length) return SP.toast("No tracks yet.");
+  SP.copy(b.map(x => `${String(x.n).padStart(2, "0")} ${x.title}\n${x.prompt}`).join("\n\n"), "all prompts");
+});
+SP.on((db) => { if (writing) return; F = loadForm(db); update(); });
+F = loadForm(SP.get());
+update();
+})();
+</script>
+</body>
+</html>
