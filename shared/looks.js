@@ -53,7 +53,7 @@ const FONTS = [
   F("Staatliches", [400], { k: 1.25 }), F("Fjalla One", [400], { k: 1.12 }), F("Six Caps", [400], { k: 1.9 }),
   F("Michroma", [400], { k: 0.74 }), F("Krona One", [400], { k: 0.76 }), F("Syncopate", [700], { k: 0.74 }), F("Bungee", [400], { k: 0.84 }),
   F("Abril Fatface", [400], { k: 1.0, serif: 1 }), F("Instrument Serif", [400], { k: 1.12, serif: 1 }), F("Italiana", [400], { k: 1.06, serif: 1 }),
-  F("Zilla Slab", [700], { k: 1.0, serif: 1 }), F("Major Mono Display", [400], { k: 0.8, mono: 1 }),
+  F("Zilla Slab", [700], { k: 1.0, serif: 1 }), F("Major Mono Display", [400], { k: 0.8, mono: 1, manual: 1 }),
 ];
 /* Type feel, for Discover's filter. */
 const FEEL = (f) => f.mono ? "mono" : f.serif ? "serif" : (f.k || 1) >= 1.1 ? "condensed" : (f.k || 1) <= 0.85 ? "wide" : "grotesk";
@@ -242,7 +242,7 @@ function randomize(state, seed, locks = {}, opts = {}) {
     s.bg = p.bg; s.ink = p.ink; s.accent = p.accent; s.paletteName = p.name;
   }
   if (!locks.type) {
-    const faces = FONTS.filter(f => feel === "any" || f.feel === feel);
+    const faces = FONTS.filter(f => (feel === "any" || f.feel === feel) && !f.manual);
     const F0 = pick(faces.length ? faces : FONTS); s.font = F0.n;
     s.bodyFont = chance(0.5) ? "" : pick(BODY_FONTS);
     s.artistFont = chance(0.22) ? pick(FONTS.filter(f => f.n !== s.font && !FINE.has(f.n))).n : "";
