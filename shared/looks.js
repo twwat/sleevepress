@@ -445,6 +445,7 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
   // A split picture owns one half: the type keeps to the other.
   if (s.imgMode === "split") {
     const picLeft = (s.imgBoxX || 0) < 25, free = picLeft ? "right" : "left";
+    if (s.artistRotate !== "none" && !hard.layout) s.artistRotate = free;
     if (s.align !== free && !hard.layout) { s.align = free; s.artistAlign = s.motifAlign = s.titleAlign = ""; if (s.footerAlign === (picLeft ? "left" : "right")) s.footerAlign = ""; }
     else if (s.align !== free && !hard.picture && s.align !== "centre") s.imgBoxX = s.align === "left" ? 50 : 0;
   }
@@ -466,15 +467,19 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
   }
   if (!hard.backdrop && s.wash !== "none") {
     const bg = hexToRgb(s.bg), ac = hexToRgb(s.accent), cols = titleCols();
-    while (s.washAmt > 15 && cols.some(tc => contrast(tc, mixRgb(bg, ac, 0.9 * s.washAmt / 100)) < 3)) s.washAmt -= 5;
+    const want = ["outline", "echo"].includes(s.titleStyle) ? 4 : 3;
+    while (s.washAmt > 15 && cols.some(tc => contrast(tc, mixRgb(bg, ac, 0.9 * s.washAmt / 100)) < want)) s.washAmt -= 5;
   }
   // Type over the picture: dim it (or re-tone it) until the worst spot still reads.
   if (!hard.picture && window.SleeveRender) {
     const box = SleeveRender.imageBox(s, 100);
     const needs = () => {
       const n = [];
-      if (r.title && s.titleStyle !== "block" && overlap(box, r.title)) titleCols().forEach(c => n.push([c, ["outline", "echo"].includes(s.titleStyle) ? 3.2 : 2.6]));
-      if (r.artist && overlap(box, r.artist)) n.push([textRgb(s, "artistColor"), 3.0]);
+      if (r.title && s.titleStyle !== "block" && overlap(box, r.title)) {
+        const t = titleEst(s), want = (["outline", "echo"].includes(s.titleStyle) ? 4 : t.size < 9 ? 3.5 : 3) + (FINE.has(s.font) ? 0.7 : 0);
+        titleCols().forEach(c => n.push([c, want]));
+      }
+      if (r.artist && overlap(box, r.artist)) n.push([textRgb(s, "artistColor"), 3.5]);
       if (r.footer && overlap(box, r.footer)) n.push([textRgb(s, "footerColor"), 2.4]);
       return n;
     };
@@ -498,6 +503,8 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
         for (const tone of ["accent", "ink", "original"]) { s.imgTone = tone; const dd = dimFor(); if (dd < best[0] - 5) best = [dd, tone]; }
         s.imgTone = best[1]; d = best[0];
       }
+      // still short at full dim: hollow title styles go solid
+      if (!hard.type && ["outline", "echo"].includes(s.titleStyle) && need.some(([c, t]) => picContrast(s, c, d) < t)) { s.titleStyle = "solid"; need = needs(); d = dimFor(); }
       s.dim = d;
     }
   }
