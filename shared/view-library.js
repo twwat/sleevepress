@@ -10,7 +10,7 @@ function norm(v) {
   if (v && typeof v === "object") { const o = {}; for (const k of Object.keys(v).sort()) o[k] = norm(v[k]); return o; }
   return v;
 }
-function sig(rec) { const r = SP.clone(rec); delete r.looks; delete r.libId; delete r.exported; return JSON.stringify(norm(r)); }
+function sig(rec) { const r = SP.clone(rec); delete r.looks; delete r.libId; delete r.exported; delete r.saved; return JSON.stringify(norm(r)); }
 let coverV = 0, baseline = null;   // baseline: { json, coverV, ts }
 let baselineSynced = () => {};     // the view repaints its "saved / unsaved" note
 SP.cover.on(() => { coverV++; });

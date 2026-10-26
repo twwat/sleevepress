@@ -22,6 +22,16 @@ function put(ctx, txt, x, y, size, face, weight, track, colour, alpha = 1, maxW 
   SR.drawTracked(ctx, txt, align === "c" ? x - w / 2 : align === "r" ? x - w : x, y, track, size, stroke);
   return { w, size };
 }
+/* Like put, but shrinks at most to minK of the size and then cuts the text short with an ellipsis. */
+function putClip(ctx, txt, x, y, size, face, weight, track, colour, alpha, maxW, minK = 0.8) {
+  if (!txt) return;
+  const w = (t, s) => { ctx.font = `${SR.weightFor(face, weight)} ${s}px ${SR.faceStack(face)}`; return SR.measureTracked(ctx, t, track, s); };
+  let s = size, full = w(txt, size);
+  if (full > maxW) s = Math.max(size * minK, size * maxW / full);
+  let t = txt;
+  while (t.length > 1 && w(t, s) > maxW) t = t.slice(0, -2).trimEnd() + "…";
+  put(ctx, t, x, y, s, face, weight, track, colour, alpha, maxW);
+}
 function ground(ctx, W, H, st, k = 0.6, shape = false) {
   const { bg, ink, spot } = cols(st);
   ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, 0, W, H);
@@ -174,6 +184,14 @@ function wrap(ctx, txt, maxW, size, face, weight, track, n = 2) {
   if (!txt) return [];
   if (measure(ctx, txt, size, face, weight, track) <= maxW) return [txt];
   const sep = txt.includes(" · ") ? " · " : " ", parts = txt.split(sep), out = []; let cur = "";
+  if (n === 2 && parts.length > 1) {   // the split that keeps the longer line shortest
+    let best = null;
+    for (let i = 1; i < parts.length; i++) {
+      const a = parts.slice(0, i).join(sep), b = parts.slice(i).join(sep), w = Math.max(measure(ctx, a, size, face, weight, track), measure(ctx, b, size, face, weight, track));
+      if (!best || w < best.w) best = { w, lines: [a, b] };
+    }
+    return best.lines;
+  }
   for (const p of parts) { const t = cur ? cur + sep + p : p; if (cur && measure(ctx, t, size, face, weight, track) > maxW) { out.push(cur); cur = p; } else cur = t; }
   if (cur) out.push(cur);
   if (out.length > n) { const head = out.slice(0, n - 1); head.push(out.slice(n - 1).join(sep)); return head; }
@@ -189,7 +207,7 @@ function balance(txt, n) {
 /* The title broken the way that sets it biggest in a box: as written, on one line, or rebalanced over 2–3 lines.
    Returns { lines, size } with a line pitch of size * lead. */
 function bestLines(ctx, written, one, maxSize, maxW, maxH, face, track, lead = 0.98, maxLines = 3) {
-  const cands = [written.slice(0, maxLines), [one], balance(one, 2), maxLines > 2 ? balance(one, 3) : null].filter(c => c && c.length && c.length <= maxLines);
+  const cands = [written.length <= maxLines ? written : null, [one], balance(one, 2), maxLines > 2 ? balance(one, 3) : null].filter(c => c && c.length && c.length <= maxLines);
   let best = null;
   for (const lines of cands) {
     const size = Math.min(fitSize(ctx, lines, maxSize, maxW, face, "700", track), maxH / (lines.length * lead));
@@ -246,7 +264,7 @@ async function promo(e, id) {
     put(ctx, date, W - m, hy, W * 0.03, bfn, "700", 0.3, ink, 0.8, cw * 0.42, "r");
     const big = cta || title, bs = fitSize(ctx, [big], W * 0.11, cw, st.font, "700", tk);
     put(ctx, big, m - bs * 0.03, hy + W * 0.025 + bs * 0.86, bs, st.font, "700", tk, hi, 1, cw);
-    const cy = hy + W * 0.06 + bs, cv = Math.min(cw, H * 0.33);
+    const cy = hy + W * 0.06 + bs, cv = Math.min(cw, H * (tracks.length ? 0.33 : 0.43));
     const cx = (W - cv) / 2;
     shadow(ctx, cx, cy, cv, cv, W * 0.05); ctx.drawImage(await cover(e, cv), cx, cy);
     // words + tracklist, between the cover and the link sticker
@@ -263,10 +281,11 @@ async function promo(e, id) {
       const minPitch = W * 0.033;
       if (pitch < minPitch) { pitch = minPitch; shown = Math.max(1, Math.floor(avail / pitch) * (two ? 2 : 1) - 1); }
       const perCol = two ? Math.ceil(shown / 2) : shown, colW = two ? (cw - W * 0.04) / 2 : cw, fs = pitch * 0.5;
+      const numW = measure(ctx, "00", fs, bfn, "700", 0.1) + fs * 0.8;
       tracks.slice(0, shown).forEach((t, i) => {
         const col = two && i >= perCol ? 1 : 0, xx = m + col * (colW + W * 0.04), yy = top + (i - col * perCol + 0.75) * pitch;
         put(ctx, String(i + 1).padStart(2, "0"), xx, yy, fs, bfn, "700", 0.1, hi, 1);
-        put(ctx, t.title.toUpperCase(), xx + fs * 2.1, yy, fs, bfn, "600", 0.08, ink, 0.88, colW - fs * 2.3);
+        putClip(ctx, t.title.toUpperCase(), xx + numW, yy, fs, bfn, "600", 0.08, ink, 0.88, colW - numW);
       });
       if (shown < tracks.length) put(ctx, `+ ${tracks.length - shown} MORE`, two ? m + colW + W * 0.04 : m, top + (perCol + (two ? 0 : 0) + 0.75) * pitch - (two ? pitch : 0), fs * 0.9, bfn, "700", 0.2, ink, 0.5);
     }
@@ -299,9 +318,9 @@ async function promo(e, id) {
 
   else if (id === "video") {
     ground(ctx, W, H, st, 0.5);
-    const cv = H * 0.74, m = (H - cv) / 2, cx = m * 1.3;
+    const many = tracks.length > 12, cv = H * (many ? 0.64 : 0.74), m = (H - cv) / 2, cx = many ? H * 0.1 : m * 1.3;
     shadow(ctx, cx, m, cv, cv, H * 0.04); ctx.drawImage(await cover(e, cv), cx, m);
-    const x = cx + cv + W * 0.05, R = W - m * 1.3, maxW = R - x;
+    const x = cx + cv + W * (many ? 0.04 : 0.05), R = W - (many ? H * 0.1 : m * 1.3), maxW = R - x;
     put(ctx, artist, x, m + H * 0.035, H * 0.03, afn, "700", 0.3, ink, 1, maxW);
     const { lines, size: ts } = bestLines(ctx, tl, title, H * 0.07, maxW, H * 0.13, st.font, tk, 1.0, 2);
     lines.forEach((l, i) => put(ctx, l, x - ts * 0.03, m + H * 0.045 + ts * (i + 0.9), ts, st.font, "700", tk, ink, 1, maxW));
@@ -310,13 +329,18 @@ async function promo(e, id) {
     const rows = chapters(tracks), top = ry + H * 0.06, avail = m + cv - H * 0.04 - top;
     const twoCol = rows.length > 12, perCol = twoCol ? Math.ceil(rows.length / 2) : rows.length;
     const pitch = Math.min(H * 0.05, avail / Math.max(1, perCol)), fs = pitch * 0.5, colW = twoCol ? (maxW - W * 0.02) / 2 : maxW;
-    const numW = measure(ctx, rows.some(x => x.at.length > 5) ? "0:00:00" : "00:00", fs * 0.85, bfn, "600", 0.1) + fs * 1.2;
+    const numWs = [0, 1].map(col => Math.max(measure(ctx, "00", fs * 0.85, bfn, "600", 0.1), ...rows.filter((_, i) => (twoCol && i >= perCol ? 1 : 0) === col).map(r => measure(ctx, r.at, fs * 0.85, bfn, "600", 0.1))) + fs * 1.1);
     rows.forEach((row, i) => {
-      const col = twoCol && i >= perCol ? 1 : 0, yy = top + (i - col * perCol) * pitch, xx = x + col * (colW + W * 0.02);
+      const col = twoCol && i >= perCol ? 1 : 0, yy = top + (i - col * perCol) * pitch, xx = x + col * (colW + W * 0.02), numW = numWs[col];
       put(ctx, row.at || String(i + 1).padStart(2, "0"), xx, yy, fs * 0.85, bfn, "600", 0.1, hi, 1);
-      put(ctx, row.title.toUpperCase(), xx + numW, yy, fs, st.font, "700", 0.02, ink, 0.92, colW - numW - fs * 0.5);
+      putClip(ctx, row.title.toUpperCase(), xx + numW, yy, fs, bfn, "700", 0.04, ink, 0.92, colW - numW - fs * 0.5, 0.75);
     });
-    if (!rows.length) put(ctx, "ADD TRACKS TO LIST THEM HERE", x, top, H * 0.022, bfn, "600", 0.2, ink, 0.4);
+    if (!rows.length) {   // no tracklist: the release-day words instead
+      let y = top + H * 0.05;
+      const big = cta || tag; put(ctx, big, x - H * 0.003, y, H * 0.07, st.font, "700", tk, hi, 1, maxW);
+      if (date) { y += H * 0.07; put(ctx, date, x, y, H * 0.04, st.font, "700", tk, ink, 1, maxW); }
+      wrap(ctx, links, maxW, H * 0.024, bfn, "600", 0.2, 2).forEach(l => { y += H * 0.05; put(ctx, l, x, y, H * 0.024, bfn, "600", 0.2, ink, 0.7, maxW); });
+    }
     put(ctx, [st.label, st.catalog, st.year].filter(v => v && v.trim()).join("  ·  ").toUpperCase(), x, m + cv, H * 0.02, bfn, "600", 0.24, ink, 0.55, maxW);
     finish(ctx, W, H, st);
   }

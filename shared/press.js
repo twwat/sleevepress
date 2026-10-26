@@ -155,6 +155,7 @@ function mergeDefaults(saved) {
     else if (typeof saved[k] === typeof d[k]) d[k] = saved[k];
   }
   if (typeof saved.libId === "string") d.libId = saved.libId;   // which saved release this came from
+  if (typeof saved.saved === "number") d.saved = saved.saved;
   return d;
 }
 function load() {
@@ -163,8 +164,14 @@ function load() {
 }
 const persistSoon = (() => { let h; return () => { clearTimeout(h); h = setTimeout(persist, 150); }; })();
 function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify(db)); }
+  db.saved = Date.now();
+  try { localStorage.setItem(KEY, JSON.stringify(db)); vault.del("record"); }
   catch (e) { vault.set("record", clone(db)).then(ok => { if (!ok) setStatus("memory"); }); }
+}
+/* If localStorage was full or refused, the newest copy went to IndexedDB: prefer it when it is newer. */
+async function recoverRecord() {
+  const v = await vault.get("record");
+  if (v && typeof v === "object" && (v.saved || 0) > ((db && db.saved) || 0)) { db = mergeDefaults(v); emit(true); }
 }
 function emit(external) { listeners.forEach(fn => { try { fn(db, external); } catch (e) { console.error(e); } }); }
 const get = () => db || load();
@@ -402,5 +409,5 @@ window.SP = {
   exportObject, downloadRelease, importFile, importObject,
   parseTracks, tracksToText, secs, fmtTime, runtime, titleLine,
 };
-load();
+load(); recoverRecord();
 })();
