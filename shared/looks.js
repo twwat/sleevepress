@@ -434,27 +434,61 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
       }
     }
   }
+  // A sideways artist name runs down an edge: keep the title off it.
+  if (!hard.layout && s.artistRotate !== "none") {
+    const hit = () => { const q = rects(s); return overlap(q.title, q.artist, 1.5) || overlap(q.motif, q.artist, 1); };
+    if (hit()) s.artistRotate = s.artistRotate === "left" ? "right" : "left";
+    while (hit() && s.margin < 15) s.margin++;
+    while (hit() && s.titleSize > 60) s.titleSize = Math.round(s.titleSize * 0.92);
+    if (hit()) s.artistRotate = "none", s.artistY = Math.min(s.artistY, 16), s.motifY = s.artistY + artistH(s) * 0.25 + 2;
+  }
+  // A split picture owns one half: the type keeps to the other.
+  if (s.imgMode === "split") {
+    const picLeft = (s.imgBoxX || 0) < 25, free = picLeft ? "right" : "left";
+    if (s.align !== free && !hard.layout) { s.align = free; s.artistAlign = s.motifAlign = s.titleAlign = ""; if (s.footerAlign === (picLeft ? "left" : "right")) s.footerAlign = ""; }
+    else if (s.align !== free && !hard.picture && s.align !== "centre") s.imgBoxX = s.align === "left" ? 50 : 0;
+  }
+  // Outline and echo need size to read.
+  if (!hard.type && ["outline", "echo"].includes(s.titleStyle)) { const t = titleEst(s); if (t && t.size < 8.5) s.titleStyle = "solid"; }
   const r = rects(s);
+  const titleCols = () => [textRgb(s, "titleColor")].concat(s.titleAccent && r.title && titleEst(s).lines > 1 ? [hexToRgb(s.accent)] : []);
   // Backdrop shape behind the title must not swallow it.
   if (!hard.backdrop && s.shape !== "none" && r.title) {
-    const bg = hexToRgb(s.bg), tc = textRgb(s, "titleColor"), rad = s.shapeSize / 2;
+    const bg = hexToRgb(s.bg), rad = s.shapeSize / 2;
     const shapeRect = () => R(s.shapeX - rad, s.shapeY - rad, rad * 2, s.shape === "half" ? rad : rad * 2);
-    const ok = () => s.titleStyle === "block" || !overlap(shapeRect(), r.title) ||
-      contrast(tc, mixRgb(bg, hexToRgb(s.shapeColor === "ink" ? s.ink : s.accent), s.shapeAmt / 100)) >= 2.6;
+    const checks = [[r.title, s.titleStyle === "block" ? [] : titleCols(), 2.6], [r.artist, [textRgb(s, "artistColor")], 3], [r.footer, [textRgb(s, "footerColor")], 2.4]];
+    const ok = () => checks.every(([q, cols, t]) => !q || !overlap(shapeRect(), q) ||
+      cols.every(c => contrast(c, mixRgb(bg, hexToRgb(s.shapeColor === "ink" ? s.ink : s.accent), s.shapeAmt / 100)) >= t));
     if (!ok()) s.shapeColor = s.shapeColor === "ink" ? "accent" : "ink";
     while (!ok() && s.shapeAmt > 30) s.shapeAmt -= 5;
-    if (!ok() || (s.shape === "bars" && ["echo", "outline"].includes(s.titleStyle) && overlap(shapeRect(), r.title))) s.shape = "none";
+    // stripes behind the title only ever look busy
+    if (!ok() || (s.shape === "bars" && overlap(shapeRect(), r.title))) s.shape = "none";
   }
   if (!hard.backdrop && s.wash !== "none") {
-    const bg = hexToRgb(s.bg), tc = textRgb(s, "titleColor"), ac = hexToRgb(s.accent);
-    while (s.washAmt > 15 && contrast(tc, mixRgb(bg, ac, 0.9 * s.washAmt / 100)) < 3) s.washAmt -= 5;
+    const bg = hexToRgb(s.bg), ac = hexToRgb(s.accent), cols = titleCols();
+    while (s.washAmt > 15 && cols.some(tc => contrast(tc, mixRgb(bg, ac, 0.9 * s.washAmt / 100)) < 3)) s.washAmt -= 5;
   }
   // Type over the picture: dim it (or re-tone it) until the worst spot still reads.
   if (!hard.picture && window.SleeveRender) {
-    const box = SleeveRender.imageBox(s, 100), need = [];
-    if (r.title && s.titleStyle !== "block" && overlap(box, r.title)) need.push([textRgb(s, "titleColor"), ["outline", "echo"].includes(s.titleStyle) ? 3.2 : 2.6]);
-    if (r.artist && overlap(box, r.artist)) need.push([textRgb(s, "artistColor"), 3.0]);
-    if (r.footer && overlap(box, r.footer)) need.push([textRgb(s, "footerColor"), 2.4]);
+    const box = SleeveRender.imageBox(s, 100);
+    const needs = () => {
+      const n = [];
+      if (r.title && s.titleStyle !== "block" && overlap(box, r.title)) titleCols().forEach(c => n.push([c, ["outline", "echo"].includes(s.titleStyle) ? 3.2 : 2.6]));
+      if (r.artist && overlap(box, r.artist)) n.push([textRgb(s, "artistColor"), 3.0]);
+      if (r.footer && overlap(box, r.footer)) n.push([textRgb(s, "footerColor"), 2.4]);
+      return n;
+    };
+    let need = needs();
+    // A spot-coloured line over the picture rarely holds up: go back to ink before dimming everything.
+    if (!hard.type && need.length) {
+      const ink = hexToRgb(s.ink), weak = (c) => c[0] !== ink[0] || c[1] !== ink[1] || c[2] !== ink[2];
+      if (need.some(([c, t]) => weak(c) && picContrast(s, c, s.imgMode === "bleed" ? 70 : 100) < t)) {
+        if (r.title && overlap(box, r.title)) { s.titleColor = "ink"; s.titleAccent = false; }
+        if (r.artist && overlap(box, r.artist)) s.artistColor = "ink";
+        if (r.footer && overlap(box, r.footer)) s.footerColor = "ink";
+        need = needs();
+      }
+    }
     if (need.length) {
       const cap = s.imgMode === "bleed" ? 85 : 100;
       const dimFor = () => { let d = s.dim; while (d < cap && need.some(([c, t]) => picContrast(s, c, d) < t)) d += 5; return Math.min(cap, d); };

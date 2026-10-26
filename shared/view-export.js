@@ -143,7 +143,7 @@ function mount(el) {
   el.append(head, checksEl);
 
   for (const g of GROUPS) {
-    const grid = h("div", { class: "ex-grid" + (g.id === "text" ? " ex-grid-text" : "") });
+    const grid = h("div", { class: "ex-grid ex-grid-" + g.id });
     const sec = h("section", { class: "ex-group", id: "ex-g-" + g.id, "aria-labelledby": "ex-h-" + g.id },
       h("div", { class: "ex-ghead" }, h("h2", { id: "ex-h-" + g.id }, g.title), h("p", {}, g.sub)));
     if (g.id === "promo") sec.append(copyFields());

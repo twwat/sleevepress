@@ -25,13 +25,18 @@
 
 /* cards */
 .view-export .ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.view-export .ex-grid-promo { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 980px) { .view-export .ex-grid-promo { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .view-export .ex-card { background: var(--bench); border: 1px solid var(--rule); display: flex; flex-direction: column; min-width: 0; }
 .view-export .ex-card.off { opacity: .6; }
 .view-export .ex-pv {
   aspect-ratio: 4 / 3; display: grid; place-items: center; padding: 12px; overflow: hidden;
   background: #0d0c0a; border-bottom: 1px solid var(--rule); position: relative;
 }
-.view-export .ex-pv canvas { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; box-shadow: 0 8px 22px rgba(0,0,0,.55); }
+.view-export .ex-pv canvas {
+  position: absolute; inset: 12px; width: calc(100% - 24px); height: calc(100% - 24px); object-fit: contain; display: block;
+  filter: drop-shadow(0 6px 14px rgba(0,0,0,.6));
+}
 .view-export .ex-pv.loading canvas { visibility: hidden; }
 .view-export .ex-pv.loading::after {
   content: "Rendering…"; position: absolute; font: 11px var(--f-mono); color: var(--chalk-faint);
@@ -41,7 +46,7 @@
   background-image: linear-gradient(45deg, #34302a 25%, transparent 25%, transparent 75%, #34302a 75%), linear-gradient(45deg, #34302a 25%, transparent 25%, transparent 75%, #34302a 75%);
   background-size: 16px 16px; background-position: 0 0, 8px 8px;
 }
-.view-export .ex-pv.checker canvas { box-shadow: none; }
+.view-export .ex-pv.checker canvas { filter: none; }
 .view-export .ex-pv.text { place-items: stretch; padding: 0; aspect-ratio: auto; height: 150px; }
 .view-export .ex-txt {
   margin: 0; padding: 10px 12px; font: 11px/1.5 var(--f-mono); color: var(--chalk-dim); white-space: pre-wrap; overflow-wrap: anywhere;
