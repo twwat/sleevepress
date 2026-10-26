@@ -12,6 +12,7 @@ function norm(v) {
 }
 function sig(rec) { const r = SP.clone(rec); delete r.looks; delete r.libId; delete r.exported; return JSON.stringify(norm(r)); }
 let coverV = 0, baseline = null;   // baseline: { json, coverV, ts }
+let baselineSynced = () => {};     // the view repaints its "saved / unsaved" note
 SP.cover.on(() => { coverV++; });
 function markClean(rec) { baseline = { json: sig(rec || SP.get()), coverV, ts: Date.now() }; }
 const isDirty = () => !baseline || baseline.json !== sig(SP.get()) || baseline.coverV !== coverV;
@@ -20,7 +21,7 @@ async function syncBaseline() {
   const idx = await SP.library.list(), e = idx.find(x => x.id === id);
   if (!e || (baseline && baseline.ts >= e.updated)) return;
   const stored = await SP.vault.get("lib." + id);
-  if (stored && stored.record) { markClean(stored.record); baseline.ts = e.updated; }
+  if (stored && stored.record) { markClean(stored.record); baseline.ts = e.updated; baselineSynced(); }
 }
 SP.library.on(syncBaseline);
 syncBaseline();
@@ -147,7 +148,7 @@ App.view("library", {
           h("div", { class: "lb-acts" },
             h("button", { type: "button", class: "btn small", "data-act": "open", onclick: () => openEntry(e) }, "Open"),
             h("button", { type: "button", class: "btn small", "data-act": "rename", onclick: () => inlineRename(name, e.name, n => SP.library.rename(e.id, n)) }, "Rename"),
-            h("button", { type: "button", class: "btn small", "data-act": "dup", onclick: () => openEntry(e, async () => { await App.saveToLibrary(true); }) }, "Duplicate"),
+            h("button", { type: "button", class: "btn small", "data-act": "dup", onclick: () => openEntry(e, async () => { const id = await App.saveToLibrary(true); await SP.library.rename(id, e.name + " (copy)"); }) }, "Duplicate"),
             h("button", { type: "button", class: "btn small lb-del", "data-act": "delete", "aria-label": "Delete " + e.name, onclick: async () => {
               if (!confirm(`Delete “${e.name}” from your library? This can't be undone.`)) return;
               await SP.library.remove(e.id);
@@ -301,6 +302,7 @@ App.view("library", {
     /* ---- refresh wiring ---- */
     function refreshAll() { refreshCurrent(); refreshLabel(); refreshSaved(); drawLooks(); }
     v.refreshAll = refreshAll;
+    baselineSynced = () => { if (v.visible) refreshCurrent(); };
     let looksSig = "";
     const onRecord = SP.debounce(() => {
       if (!v.visible) return;

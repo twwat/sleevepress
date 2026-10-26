@@ -150,25 +150,26 @@ function layout(o, db) {
     }
   }
 
-  // free shelf packing, tallest first (stable)
+  // free shelf packing, tallest first (stable). The trim + bleed stays inside the margin; crop marks may
+  // run into the margin, and neighbours sit far enough apart that marks never land on another piece.
   if (rects.length) {
+    const sp = GAP + (o.crops ? cropPad * 2 : 0);
     for (const it of rects) {
-      const pad = it.s.round ? b : Math.max(b, cropPad + b);
-      let fw = it.s.w + pad * 2, fh = it.s.h + pad * 2;
+      let fw = it.s.w + b * 2, fh = it.s.h + b * 2;
       it.rot = false;
       if (!it.s.round && (fw > pw || fh > ph) && fh <= pw && fw <= ph) { it.rot = true; [fw, fh] = [fh, fw]; }
       if (fw > pw + 0.01 || fh > ph + 0.01) warn.push(`${it.name} is larger than the printable area of ${paper.label}.`);
-      it.fw = fw; it.fh = fh; it.pad = pad;
+      it.fw = fw; it.fh = fh;
     }
     const sorted = rects.map((it, i) => [it, i]).sort((a, z) => (z[0].fh - a[0].fh) || (a[1] - z[1])).map(x => x[0]);
     let pg = null, x = 0, y = 0, shelf = 0;
     for (const it of sorted) {
       if (!pg) { pg = newPage(); x = 0; y = 0; shelf = 0; }
-      if (x > 0 && x + it.fw > pw + 0.01) { x = 0; y += shelf + GAP; shelf = 0; }
+      if (x > 0 && x + it.fw > pw + 0.01) { x = 0; y += shelf + sp; shelf = 0; }
       if (y > 0 && y + it.fh > ph + 0.01) { pg = newPage(); x = 0; y = 0; shelf = 0; }
-      const ox = MARGIN + x + it.pad, oy = MARGIN + y + it.pad;
+      const ox = MARGIN + x + b, oy = MARGIN + y + b;
       if (it.s.round) drawRound(pg, it, ox + it.s.w / 2, oy + it.s.h / 2, it.s.w); else drawRect(pg, it, ox, oy);
-      x += it.fw + GAP; shelf = Math.max(shelf, it.fh);
+      x += it.fw + (it.s.round ? GAP : sp); shelf = Math.max(shelf, it.fh);
     }
   }
 

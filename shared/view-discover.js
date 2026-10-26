@@ -91,7 +91,7 @@ function renderCard(card) {
 
 function watchAll() {
   if (lazy && lazy.stop) lazy.stop();
-  lazy = App.lazy(renderCard, "400px");
+  lazy = App.lazy(renderCard, "700px");
   cards.forEach(c => lazy.watch(c));
 }
 
@@ -100,7 +100,7 @@ function clearGrid() {
   cards.forEach(c => { if (c._url) URL.revokeObjectURL(c._url); });
   cards.clear(); grid.textContent = ""; count = 0;
   if (lazy && lazy.stop) lazy.stop();
-  lazy = App.lazy(renderCard, "400px");
+  lazy = App.lazy(renderCard, "700px");
 }
 
 function addBatch() {

@@ -179,6 +179,24 @@ function wrap(ctx, txt, maxW, size, face, weight, track, n = 2) {
   if (out.length > n) { const head = out.slice(0, n - 1); head.push(out.slice(n - 1).join(sep)); return head; }
   return out;
 }
+/* Words split into n lines of about equal length. */
+function balance(txt, n) {
+  const words = txt.split(/\s+/).filter(Boolean); if (words.length < n) return null;
+  const target = txt.length / n, out = []; let cur = "";
+  for (const w of words) { if (cur && out.length < n - 1 && (cur + " " + w).length > target * 1.08) { out.push(cur); cur = w; } else cur = cur ? cur + " " + w : w; }
+  out.push(cur); return out.length === n ? out : null;
+}
+/* The title broken the way that sets it biggest in a box: as written, on one line, or rebalanced over 2–3 lines.
+   Returns { lines, size } with a line pitch of size * lead. */
+function bestLines(ctx, written, one, maxSize, maxW, maxH, face, track, lead = 0.98, maxLines = 3) {
+  const cands = [written.slice(0, maxLines), [one], balance(one, 2), maxLines > 2 ? balance(one, 3) : null].filter(c => c && c.length && c.length <= maxLines);
+  let best = null;
+  for (const lines of cands) {
+    const size = Math.min(fitSize(ctx, lines, maxSize, maxW, face, "700", track), maxH / (lines.length * lead));
+    if (!best || size > best.size * 1.04) best = { lines, size };
+  }
+  return best;
+}
 /* The picture (toned like the sleeve) filling a box; false when there is none. */
 function picture(ctx, e, x, y, w, h, blur = 0) {
   const t = SR.toned(e.image, e.st); if (!t) return false;
@@ -235,8 +253,7 @@ async function promo(e, id) {
     const pillH = H * 0.055, pillY = H * 0.82;
     let y = cy + cv + H * 0.045;
     put(ctx, artist, m, y, W * 0.03, afn, "700", 0.3, ink, 0.8, cw);
-    let tls = [title], ts = fitSize(ctx, tls, W * 0.075, cw, st.font, "700", tk);
-    if (ts < W * 0.05 && tl.length === 2) { tls = tl; ts = fitSize(ctx, tls, W * 0.075, cw, st.font, "700", tk); }
+    const { lines: tls, size: ts } = bestLines(ctx, tl, title, W * 0.075, cw, W * 0.16, st.font, tk, 1.0);
     tls.forEach((l) => { y += ts * 1.0; put(ctx, l, m - ts * 0.03, y, ts, st.font, "700", tk, ink, 1, cw); });
     const top = y + H * 0.03, avail = pillY - H * 0.03 - top;
     if (tracks.length && avail > W * 0.05) {
@@ -273,9 +290,9 @@ async function promo(e, id) {
     put(ctx, tag, m + bs * 0.6, H * 0.1 + bs * 1.27, bs, bfn, "700", 0.2, onFill(spot, bg, ink));
     put(ctx, artist, m, H * 0.3, H * 0.055, afn, "700", 0.24, ink, 0.85, maxW);
     // title: as many lines as it has (max 3), as big as the room allows
-    const lines = tl.slice(0, 3), lh = Math.min(H * 0.2, (H * 0.46) / lines.length);
-    const fs = fitSize(ctx, lines, lh, maxW, st.font, "700", tk);
-    lines.forEach((l, i) => put(ctx, l, m - fs * 0.03, H * 0.33 + lh * (i + 0.86), fs, st.font, "700", tk, ink, 1, maxW));
+    const { lines, size: fs } = bestLines(ctx, tl, title, H * 0.2, maxW, H * 0.46, st.font, tk, 0.98);
+    const y0 = H * 0.33 + (H * 0.46 - lines.length * fs * 0.98) / 2;
+    lines.forEach((l, i) => put(ctx, l, m - fs * 0.03, y0 + fs * (i * 0.98 + 0.86), fs, st.font, "700", tk, ink, 1, maxW));
     put(ctx, [cta, date].filter(Boolean).join("  ·  "), m, H * 0.9, H * 0.042, bfn, "700", 0.22, hi, 1, maxW);
     finish(ctx, W, H, st);
   }
@@ -286,9 +303,11 @@ async function promo(e, id) {
     shadow(ctx, cx, m, cv, cv, H * 0.04); ctx.drawImage(await cover(e, cv), cx, m);
     const x = cx + cv + W * 0.05, R = W - m * 1.3, maxW = R - x;
     put(ctx, artist, x, m + H * 0.035, H * 0.03, afn, "700", 0.3, ink, 1, maxW);
-    put(ctx, title, x, m + H * 0.105, H * 0.07, st.font, "700", tk, ink, 1, maxW);
-    ctx.strokeStyle = rgba(ink, 0.3); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, m + H * 0.14); ctx.lineTo(R, m + H * 0.14); ctx.stroke();
-    const rows = chapters(tracks), top = m + H * 0.2, avail = cv - H * 0.24;
+    const { lines, size: ts } = bestLines(ctx, tl, title, H * 0.07, maxW, H * 0.13, st.font, tk, 1.0, 2);
+    lines.forEach((l, i) => put(ctx, l, x - ts * 0.03, m + H * 0.045 + ts * (i + 0.9), ts, st.font, "700", tk, ink, 1, maxW));
+    const ry = m + H * 0.075 + ts * lines.length;
+    ctx.strokeStyle = rgba(ink, 0.3); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, ry); ctx.lineTo(R, ry); ctx.stroke();
+    const rows = chapters(tracks), top = ry + H * 0.06, avail = m + cv - H * 0.04 - top;
     const twoCol = rows.length > 12, perCol = twoCol ? Math.ceil(rows.length / 2) : rows.length;
     const pitch = Math.min(H * 0.05, avail / Math.max(1, perCol)), fs = pitch * 0.5, colW = twoCol ? (maxW - W * 0.02) / 2 : maxW;
     const numW = measure(ctx, rows.some(x => x.at.length > 5) ? "0:00:00" : "00:00", fs * 0.85, bfn, "600", 0.1) + fs * 1.2;
@@ -322,7 +341,7 @@ async function promo(e, id) {
     shadow(ctx, cx, cy, cv, cv, H * 0.05); ctx.drawImage(await cover(e, cv), cx, cy);
     // words, centred vertically, starting a third of the way in (the avatar sits bottom-left)
     const x = W * 0.33, maxW = cx - x - H * 0.14;
-    const lines = tl.length > 2 ? [title] : tl, ts = fitSize(ctx, lines, H * 0.13, maxW, st.font, "700", tk);
+    const { lines, size: ts } = bestLines(ctx, tl, title, H * 0.13, maxW, H * 0.3, st.font, tk, 0.98);
     const as = Math.min(H * 0.05, ts * 0.45), cs = H * 0.04, foot = [cta, date].filter(Boolean).join("  ·  ");
     const blockH = as * 1.5 + lines.length * ts * 0.98 + (foot ? cs * 2.3 : 0);
     let y = H / 2 - blockH / 2 + as;
