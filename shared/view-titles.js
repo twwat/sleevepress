@@ -165,8 +165,8 @@ function render() {
   for (const c of list) {
     const a = actions(c.text);
     a.prepend(star(c.text));
-    a.append(App.h("span", { class: "meta" }, `${c.syl} syl`));
-    g.append(App.h("div", { class: "cand" + (shortlist.includes(c.text) ? " starred" : "") }, App.h("div", { class: "t" }, c.text), a));
+    g.append(App.h("div", { class: "cand" + (shortlist.includes(c.text) ? " starred" : "") },
+      App.h("div", { class: "top" }, App.h("div", { class: "t" }, c.text), App.h("span", { class: "meta", title: "syllables" }, `${c.syl} syl`)), a));
   }
   const note = q("note"); note.textContent = "";
   if (riffOn) {

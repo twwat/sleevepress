@@ -421,7 +421,6 @@ const scheduleThumbs = SP.debounce(() => {
       else if (P.id === "sticker") c = await stickerThumb(e);
       else c = await artwork(e, P.id, PPM_THUMB, o);
       cv.width = c.width; cv.height = c.height; cv.getContext("2d").drawImage(c, 0, 0);
-      const sp = spec(o, P.id); cv.parentNode.style.aspectRatio = P.id === "sticker" ? "1" : `${sp.w} / ${sp.h}`;
       await new Promise(r => setTimeout(r, 0));
     }
   });

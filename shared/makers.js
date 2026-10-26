@@ -133,7 +133,11 @@ async function vinylPng(e, side, D, hole = 0.0724) {
 }
 async function disc(e, D, hole = 41 / 117) {
   const st = e.st, c = mk(D, D), ctx = c.getContext("2d"), { bg, ink, spot } = cols(st);
-  ctx.drawImage(await cover(e, D), 0, 0);
+  // The cover's own look, but with the words moved clear of the hub: artist near the top, title as one line near the bottom.
+  const discSt = { ...st, title: titleOneLine(st), titleCase: "asis", titlePos: "lower", titleDy: 7, titleSize: Math.min(st.titleSize, 80), titleX: 0, titleAlign: "centre",
+    align: "centre", margin: 19, artistY: 17, artistX: 0, artistAlign: "centre", artistRotate: "none", year: "", motifKind: "none", footer: "",
+    barcode: false, plate: false, labelMark: "none", frame: false, vignette: 0 };
+  ctx.drawImage(await cover({ ...e, st: discSt }, D), 0, 0);
   // a quiet ring of ground round the hub, with the catalogue set round it
   const r = D / 2, hubR = D * hole / 2, ringR = hubR + D * 0.075;
   ctx.fillStyle = rgba(bg, 0.92); ctx.beginPath(); ctx.arc(r, r, ringR, 0, Math.PI * 2); ctx.fill();
@@ -222,8 +226,10 @@ function picture(ctx, e, x, y, w, h, blur = 0) {
   SR.drawCover(ctx, t, x, y, w, h, { zoom: 100, shiftX: e.st.shiftX, shiftY: e.st.shiftY }); ctx.restore(); return true;
 }
 
-async function promo(e, id) {
-  const P = PROMO.find(p => p.id === id), W = P.w, H = P.h, c = mk(W, H), ctx = c.getContext("2d");
+/* scale < 1 draws the same design smaller (previews). */
+async function promo(e, id, scale = 1) {
+  const P = PROMO.find(p => p.id === id); if (!P) throw new Error("unknown promo " + id);
+  const W = Math.round(P.w * scale), H = Math.round(P.h * scale), c = mk(W, H), ctx = c.getContext("2d");
   const st = e.st, r = e.db.release, { bg, ink, spot } = cols(st), bfn = bodyOf(st), afn = st.artistFont || bfn;
   await SR.loadFonts(st); ctx.textBaseline = "alphabetic";
   const artist = SR.applyCase(st.artist, st.artistCase || "upper"), title = titleOneLine(st), tl = titleLines(st);
@@ -325,7 +331,7 @@ async function promo(e, id) {
     const { lines, size: ts } = bestLines(ctx, tl, title, H * 0.07, maxW, H * 0.13, st.font, tk, 1.0, 2);
     lines.forEach((l, i) => put(ctx, l, x - ts * 0.03, m + H * 0.045 + ts * (i + 0.9), ts, st.font, "700", tk, ink, 1, maxW));
     const ry = m + H * 0.075 + ts * lines.length;
-    ctx.strokeStyle = rgba(ink, 0.3); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, ry); ctx.lineTo(R, ry); ctx.stroke();
+    ctx.strokeStyle = rgba(ink, 0.3); ctx.lineWidth = Math.max(1, H * 0.002); ctx.beginPath(); ctx.moveTo(x, ry); ctx.lineTo(R, ry); ctx.stroke();
     const rows = chapters(tracks), top = ry + H * 0.06, avail = m + cv - H * 0.04 - top;
     const twoCol = rows.length > 12, perCol = twoCol ? Math.ceil(rows.length / 2) : rows.length;
     const pitch = Math.min(H * 0.05, avail / Math.max(1, perCol)), fs = pitch * 0.5, colW = twoCol ? (maxW - W * 0.02) / 2 : maxW;
@@ -410,9 +416,9 @@ function chaptersText(db) {
   if (!rows.length) return "";
   const head = `${r.artist} — ${SP.titleLine(r)}`;
   const timed = rows[0].at !== "";
-  return [head, "", "Tracklist", ...rows.map((x, i) => timed ? `${x.at.length < 5 ? "0" + x.at : x.at} ${x.title}` : `${i + 1}. ${x.title}`),
-    ...(timed ? [] : ["", "(Add a length to every track to get YouTube chapter timestamps.)"])].join("\n");
+  // paste-ready: no notes to the user in here (the Export view says when timestamps are missing)
+  return [head, "", "Tracklist", ...rows.map((x, i) => timed ? `${x.at.length < 5 ? "0" + x.at : x.at} ${x.title}` : `${i + 1}. ${x.title}`)].join("\n");
 }
 
-window.Makers = { env, mk, cover, back, booklet2, inlay, wallet, vinyl, vinylPng, vinylSides, disc, promo, PROMO, PRINT, chapters, chaptersText, put };
+window.Makers = { env, mk, cover, back, booklet2, inlay, wallet, vinyl, vinylPng, vinylSides, disc, promo, PROMO, PRINT, chapters, chaptersText, put, putClip };
 })();

@@ -499,11 +499,20 @@ async function render(canvas, state, image, logo) {
 
   // Artist (+ year)
   const artistY = S * st.artistY / 100;
-  const artistSize = S * 0.0295 * st.artistSize / 100, aTrack = st.artistTrack / 100;
+  let artistSize = S * 0.0295 * st.artistSize / 100; const aTrack = st.artistTrack / 100;
   const artistText = applyCase(st.artist, st.artistCase || "upper");
-  ctx.font = `${weightFor(artistFace, st.artistWeight || 700)} ${artistSize}px ${faceStack(artistFace)}`; ctx.fillStyle = rgba(colourOf(st.artistColor), 1);
-  const aw = measureTracked(ctx, artistText, aTrack, artistSize);
   const rotated = st.artistRotate === "left" || st.artistRotate === "right";
+  // Long names shrink to fit the sleeve, leaving room for the year when it shares the line.
+  ctx.font = `${weightFor(bodyFace, "600")} ${S * 0.016}px ${bface}`;
+  const yearW = st.year.trim() && !rotated ? measureTracked(ctx, st.year.toUpperCase(), 0.26, S * 0.016) + S * 0.025 : 0;
+  const artistRoom = rotated ? S - X : S - X * 2 - yearW * (alignOf("artist") === "centre" ? 2 : 1);
+  ctx.font = `${weightFor(artistFace, st.artistWeight || 700)} ${artistSize}px ${faceStack(artistFace)}`; ctx.fillStyle = rgba(colourOf(st.artistColor), 1);
+  let aw = measureTracked(ctx, artistText, aTrack, artistSize);
+  if (aw > artistRoom && aw > 0) {
+    artistSize *= artistRoom / aw;
+    ctx.font = `${weightFor(artistFace, st.artistWeight || 700)} ${artistSize}px ${faceStack(artistFace)}`;
+    aw = measureTracked(ctx, artistText, aTrack, artistSize);
+  }
   if (artistText && rotated) {
     // Runs up the left edge or down the right edge; artistY is where its middle sits.
     const left = st.artistRotate === "left", ex = left ? X * 0.62 + artistSize * 0.72 : S - X * 0.62 - artistSize * 0.72;

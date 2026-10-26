@@ -4,9 +4,11 @@
 .view-titles .studio.words, .view-forge .studio.words { padding-top: 4px; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 24px; }
 .view-titles .main, .view-forge .main { min-width: 0; display: grid; gap: 14px; align-content: start; }
 .view-titles .ticket, .view-forge .ticket { align-content: start; }
+.view-titles .ticket > *, .view-forge .ticket > *, .view-forge .main > * { min-width: 0; }
+.view-titles summary > span, .view-forge summary > span { flex: none; }
 .view-titles summary small, .view-forge summary small {
   font: 400 11px var(--f-mono); letter-spacing: .02em; text-transform: none; color: var(--chalk-faint);
-  margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%;
+  flex: 1 1 0; text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .view-titles summary::after, .view-forge summary::after { flex: none; }
 .view-titles .seed, .view-forge .seed { font: 12px var(--f-mono); color: var(--chalk-dim); align-self: center; white-space: nowrap; }
@@ -33,7 +35,9 @@
 .view-titles .cand.starred { border-color: var(--warn); }
 .view-titles .cand .t { font-weight: 700; font-size: 16px; letter-spacing: .01em; overflow-wrap: anywhere; line-height: 1.25; }
 .view-titles .a { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.view-titles .a .meta { margin-left: auto; font: 10px var(--f-mono); color: var(--chalk-faint); }
+.view-titles .cand .top { display: flex; align-items: baseline; gap: 8px; }
+.view-titles .cand .top .t { flex: 1; min-width: 0; }
+.view-titles .meta { font: 10px var(--f-mono); color: var(--chalk-faint); white-space: nowrap; }
 .view-titles .star {
   background: none; border: 1px solid var(--rule-strong); color: var(--chalk-faint); width: 32px; height: 32px; border-radius: 2px;
   font-size: 14px; line-height: 1; padding: 0; flex: none;
@@ -82,3 +86,12 @@
   .view-forge .seg button { font-size: 11px; padding: 8px 3px; }
   .view-forge .btn-row .sp { flex-basis: 100%; height: 0; }
 }
+
+/* compact rows: title + prompt on the left, Copy on the right */
+.view-forge .batch .it { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "b a" "p a"; column-gap: 12px; align-items: center; }
+.view-forge .batch .it > b { grid-area: b; }
+.view-forge .batch .it > .p { grid-area: p; }
+.view-forge .batch .it > .a { grid-area: a; flex-wrap: nowrap; }
+.view-forge #sf-bank .it > .a { flex-direction: column; align-items: stretch; }
+.view-forge label.f > span { min-height: 28px; }
+.view-titles .view-head > div:first-child, .view-forge .view-head > div:first-child { flex: 1 1 320px; }

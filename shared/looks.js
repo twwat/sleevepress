@@ -140,88 +140,391 @@ function moodsOf(p) {
 const MOODS = ["any", "dark", "light", "bold", "mono", "warm", "cool"];
 const FEELS = ["any", "grotesk", "condensed", "wide", "serif", "mono"];
 
+/* ---------- geometry estimates ----------
+   Everything below works in sleeve percent (0..100) so the randomizer can keep elements apart without
+   measuring text (fonts may not be loaded yet, and the result must not depend on that).
+   ADV: average advance per character, [capitals, lower case] as a share of the title size before the
+   font's k, and [2] for small caps-tracked artist text as a share of its own size. Measured in Chrome. */
+const ADV = {
+  "Archivo": [0.613, 0.466, 0.644], "Inter Tight": [0.57, 0.458, 0.602], "Space Grotesk": [0.549, 0.491, 0.582], "Syne": [0.676, 0.516, 0.752],
+  "Barlow Condensed": [0.49, 0.429, 0.434], "Oswald": [0.715, 0.576, 0.636], "Bebas Neue": [0.466, 0.466, 0.363], "Anton": [0.541, 0.527, 0.442],
+  "League Gothic": [0.459, 0.38, 0.333], "Big Shoulders Display": [0.461, 0.439, 0.39], "Archivo Black": [0.653, 0.522, 0.712],
+  "Unbounded": [0.609, 0.504, 0.796], "Rubik Mono One": [0.637, 0.637, 0.85], "DM Serif Display": [0.547, 0.456, 0.556],
+  "Playfair Display": [0.605, 0.465, 0.628], "Bodoni Moda": [0.61, 0.467, 0.671], "Fraunces": [0.633, 0.49, 0.682],
+  "Cormorant Garamond": [0.641, 0.438, 0.593], "Space Mono": [0.49, 0.49, 0.612], "IBM Plex Mono": [0.492, 0.492, 0.6],
+  "Bricolage Grotesque": [0.561, 0.469, 0.623], "Chakra Petch": [0.571, 0.481, 0.606], "Archivo Narrow": [0.549, 0.433, 0.524],
+  "Staatliches": [0.481, 0.481, 0.41], "Fjalla One": [0.482, 0.439, 0.46], "Six Caps": [0.399, 0.388, 0.222], "Michroma": [0.644, 0.46, 0.927],
+  "Krona One": [0.609, 0.499, 0.832], "Syncopate": [0.608, 0.615, 0.863], "Bungee": [0.532, 0.532, 0.655], "Abril Fatface": [0.581, 0.461, 0.614],
+  "Instrument Serif": [0.478, 0.386, 0.449], "Italiana": [0.551, 0.45, 0.553], "Zilla Slab": [0.582, 0.448, 0.602], "Major Mono Display": [0.592, 0.592, 0.74],
+};
+const adv = (face, i) => (ADV[face] || [0.6, 0.48, 0.62])[i];
+/* Faces too fine for outline / echo treatments. */
+const FINE = new Set(["Italiana", "Instrument Serif", "Cormorant Garamond", "Major Mono Display", "Six Caps"]);
+const TITLE_BASE = { upper: 56, centre: 68, lower: 81.5 };
+const titleBottom = (s) => (TITLE_BASE[s.titlePos] ?? 68) + (s.titleDy || 0);
+
+function titleEst(s) {
+  const lines = String(s.title || "").split("\n").map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const k = (FONT[s.font] || {}).k || 1, cs = s.titleCase || "upper";
+  const r = cs === "upper" ? adv(s.font, 0) : cs === "lower" ? adv(s.font, 1) : adv(s.font, 0) * 0.25 + adv(s.font, 1) * 0.75;
+  let size = 19 * (s.titleSize / 100) * k;
+  const n = Math.max(...lines.map(l => [...l].length)), per = r / k + (s.tracking || 0) / 100, maxW = 100 - 2 * s.margin;
+  let w = size * (n * per - (s.tracking || 0) / 100);
+  if (w > maxW) { size *= maxW / w; w = maxW; }
+  const h = size * (s.leading / 100) * (lines.length - 1) + size * 0.72;
+  const desc = cs !== "upper" && /[gjpqy,]/.test(lines[lines.length - 1].toLowerCase()) ? size * 0.24 : size * 0.05;
+  return { size, w, h, desc, above: s.titleStyle === "echo" ? size * 0.5 : s.titleStyle === "block" ? size * 0.1 : 0, lines: lines.length };
+}
+const artistH = (s) => 2.95 * s.artistSize / 100;
+function artistW(s) {
+  const t = String(s.artist || ""); if (!t) return 0;
+  const face = s.artistFont || s.bodyFont || s.font, a = artistH(s);
+  return Math.min(100 - 2 * s.margin, [...t].length * a * (adv(face, 2) + s.artistTrack / 100));
+}
+const motifH = (s) => s.motifKind === "none" || !s.count ? 0 : 5 * s.motifSize / 100;
+const motifW = (s) => (s.count - 1) * 2.32 * s.motifPitch / 100 + 1.05 * (s.motifSize / 100) * 1.6;
+const xAt = (s, w, al) => al === "centre" ? (100 - w) / 2 : al === "right" ? 100 - s.margin - w : s.margin;
+const R = (x, y, w, h) => ({ x, y, w, h });
+const overlap = (a, b, pad = 0) => !a || !b ? 0 :
+  Math.max(0, Math.min(a.x + a.w, b.x + b.w) + pad - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) + pad - Math.max(a.y, b.y));
+/* Approximate boxes of every text element, in sleeve percent. */
+function rects(s) {
+  const out = {}, t = titleEst(s), al = (el) => s[el + "Align"] || s.align;
+  if (t) { const tb = titleBottom(s); out.title = R(xAt(s, t.w, al("title")), tb - t.h - t.above, t.w, t.h + t.above + t.desc); }
+  const a = artistH(s), aw = artistW(s);
+  if (aw) {
+    if (s.artistRotate === "left" || s.artistRotate === "right") {
+      const x = s.artistRotate === "left" ? s.margin * 0.62 : 100 - s.margin * 0.62 - a;
+      const cy = Math.min(100 - aw / 2 - s.margin / 2, Math.max(aw / 2 + s.margin / 2, s.artistY));
+      out.artist = R(x, cy - aw / 2, a, aw);
+    } else out.artist = R(xAt(s, aw, al("artist")), s.artistY - a * 0.8, aw, a * 1.05);
+  }
+  if (String(s.year || "").trim()) {
+    const rot = s.artistRotate === "left" || s.artistRotate === "right", aal = rot ? "centre" : al("artist");
+    out.year = R(aal === "right" ? s.margin : 100 - s.margin - 6, (rot ? 7 : s.artistY) - 1.4, 6, 1.8);
+  }
+  const mh = motifH(s);
+  if (mh) { const mw = motifW(s); out.motif = R(xAt(s, mw, al("motif")), s.motifY, mw, mh); }
+  if (String(s.footer || "").trim()) {
+    const fs = 1.72 * s.footerSize / 100, fw = Math.min(100 - 2 * s.margin, [...s.footer].length * fs * (0.62 + s.footerTrack / 100));
+    out.footer = R(xAt(s, fw, al("footer")), s.footerY - fs, fw, fs * 1.3);
+  }
+  if (s.barcode) { const bw = 17.5 * (s.barcodeSize || 100) / 100; out.barcode = R(100 - s.margin - bw, 93.5 - 8.5 * (s.barcodeSize || 100) / 100, bw, 8.5 * (s.barcodeSize || 100) / 100); }
+  return out;
+}
+
+/* ---------- colour helpers for legibility checks ---------- */
+const mixRgb = (a, b, t) => [0, 1, 2].map(i => a[i] + (b[i] - a[i]) * t);
+const textRgb = (s, which) => hexToRgb(s[which] === "accent" ? s.accent : s.ink);
+/* Worst contrast a text colour can meet on the toned picture after dimming (the tone's two ends, pulled toward the ground). */
+function picContrast(s, txt, dim) {
+  const bg = hexToRgb(s.bg), eff = (dim / 100) * (s.imgMode === "bleed" ? 1 : 0.5);
+  const ends = s.imgTone === "original" ? [[0, 0, 0], [255, 255, 255]] : [bg, hexToRgb(s.imgTone === "accent" ? s.accent : s.ink)];
+  return Math.min(...ends.map(e => contrast(txt, mixRgb(e, bg, eff))));
+}
+
 /* ---------- the randomizer ----------
-   locks: { colour, type, layout, motif, border, backdrop }  true = leave that group alone. */
-/* opts: { mood, feel } narrow colour and type for Discover. */
+   locks: { colour, type, layout, motif, border, backdrop, picture }  true = leave that group alone.
+   opts: { mood, feel } narrow colour and type for Discover. (hard, hue, paletteMode are used by mutate.)
+   The groups are rolled first, then a repair pass keeps text apart, off the picture's busy parts and legible. */
 function randomize(state, seed, locks = {}, opts = {}) {
   const rnd = mulberry32((seed * 2654435761) >>> 0 || 1), pick = (a) => a[Math.floor(rnd() * a.length)];
   const between = (a, b, step = 1) => Math.round((a + rnd() * (b - a)) / step) * step;
   const chance = (p) => rnd() < p;
   const s = { ...state };
+  const hard = opts.hard || locks;   // groups the repair pass may not touch either
 
   const mood = opts.mood || "any", feel = opts.feel || "any";
   if (!locks.colour) {
     const pool = PALETTES.filter(p => moodsOf(p).includes(mood));
-    const p = chance(0.4) && pool.length ? pick(pool) : makePalette(rnd, mood);
+    const p = opts.hue == null && chance(0.4) && pool.length ? pick(pool) : makePalette(rnd, opts.paletteMode || mood, opts.hue);
     s.bg = p.bg; s.ink = p.ink; s.accent = p.accent; s.paletteName = p.name;
   }
   if (!locks.type) {
     const faces = FONTS.filter(f => feel === "any" || f.feel === feel);
-    s.font = pick(faces.length ? faces : FONTS).n;
+    const F0 = pick(faces.length ? faces : FONTS); s.font = F0.n;
     s.bodyFont = chance(0.5) ? "" : pick(BODY_FONTS);
-    s.artistFont = chance(0.22) ? pick(FONTS).n : "";
+    s.artistFont = chance(0.22) ? pick(FONTS.filter(f => f.n !== s.font && !FINE.has(f.n))).n : "";
     s.artistCase = pick(["upper", "upper", "upper", "title", "lower"]); s.artistColor = chance(0.2) ? "accent" : "ink";
     s.artistWeight = pick([600, 700, 700, 800]);
-    s.titleStyle = chance(0.6) ? "solid" : pick(["outline", "echo", "shadow", "block", "block", "shadow"]);
+    s.artistTrack = s.artistCase === "upper" ? between(16, 44) : between(4, 14);
+    s.artistSize = between(85, 130, 5);
+    s.titleStyle = chance(0.6) ? "solid" : pick(FINE.has(s.font) ? ["shadow", "block", "block"] : ["outline", "echo", "shadow", "block", "block", "shadow"]);
     s.titleColor = chance(0.12) ? "accent" : "ink";
+    s.titleCase = pick(F0.mono ? ["upper", "upper", "lower"] : ["upper", "upper", "upper", "title", "lower"]);
+    const up = s.titleCase === "upper";
+    // Tight caps, open lower case; serifs and monos want a touch more air.
+    s.leading = F0.mono ? between(88, 100) : up ? between(F0.serif ? 84 : 78, F0.serif ? 96 : 92) : between(88, 104);
+    const tr = { wide: [-4, 1], condensed: [-2, 6], serif: [-3, 2], mono: [-2, 2], grotesk: [-4, 5] }[F0.feel] || [-3, 4];
+    s.tracking = between(tr[0], up ? tr[1] : Math.min(tr[1], 2));
+    s.titleAccent = chance(0.25);
     s.footerColor = chance(0.15) ? "accent" : "ink"; s.footerOpacity = between(45, 80);
-    s.titleSize = between(86, 124); s.tracking = between(-4, 8);
-    s.artistTrack = between(18, 42); s.artistSize = between(85, 130, 5); s.footerSize = between(90, 125, 5);
-    s.titleCase = pick(["upper", "upper", "upper", "title", "lower"]);
-    s.leading = between(78, 100); s.titleAccent = chance(0.25);
-    if (FONT[s.font].mono) { s.tracking = between(-2, 2); s.titleSize = Math.min(s.titleSize, 110); }
-  }
-  if (!locks.layout) {
-    const L = LAYOUTS[pick(Object.keys(LAYOUTS))]; LAYOUT_KEYS.forEach(k => { s[k] = L[k]; });
-    s.margin = between(8, 14); s.titleDy += between(-3, 3);
-    s.footerPos = chance(0.15) ? "top" : "bottom"; if (s.footerPos === "top") s.footerY = between(6, 9);
-    s.titleAlign = s.artistAlign = s.footerAlign = s.motifAlign = ""; s.titleX = s.artistX = s.footerX = s.motifX = 0;
-    if (chance(0.18)) s.artistAlign = pick(["left", "centre", "right"]);
-    if (chance(0.12)) s.footerAlign = pick(["left", "centre", "right"]);
-    s.artistRotate = chance(0.1) ? pick(["left", "right"]) : "none";
-  }
-  if (!locks.picture) {
-    s.imgMode = chance(0.55) ? "bleed" : pick(["panel", "band", "circle", "split", "inset", "top", "arch"]);
-    s.imgTone = pick(["ink", "ink", "accent", "original"]); s.dim = s.imgMode === "bleed" ? between(35, 75) : between(0, 40);
-    s.imgPosterize = chance(0.2) ? between(2, 5) : 0; s.imgContrast = between(90, 140, 5);
-    s.imgBoxSize = 100; s.imgBoxX = 0; s.imgBoxY = 0;
+    s.footerSize = between(90, 120, 5); s.footerTrack = between(14, 36); s.footerCase = chance(0.85) ? "upper" : "asis";
   }
   if (!locks.motif) {
     s.motifKind = chance(0.1) ? "none" : pick(MOTIFS);
-    s.count = between(3, 16); s.missing = chance(0.5) ? 0 : between(1, s.count);
+    s.motifSize = between(75, 140, 5); s.motifPitch = between(85, 160, 5);
+    s.count = between(3, 14);
+    while (s.count > 3 && motifW(s) > 40) s.count--;   // a row of marks, not a fence
+    s.missing = chance(0.5) ? 0 : between(1, s.count);
     s.missingStyle = pick(["outline", "filled", "gap"]);
-    s.motifSize = between(75, 150, 5); s.motifPitch = between(85, 170, 5);
   }
   if (!locks.border) {
-    s.frame = chance(0.8); s.frameStyle = pick(FRAME_STYLES); s.frameInset = between(3, 7, 0.5);
+    s.frame = chance(0.75); s.frameStyle = pick(FRAME_STYLES); s.frameInset = between(3, 7, 0.5);
     s.frameWidth = between(80, 220, 10); s.frameOpacity = between(14, 55); s.frameColor = chance(0.8) ? "ink" : "accent";
     s.barcodeStyle = pick(["box", "box", "clear", "spot", "spotbox"]);
   }
+  if (FONT[s.font] && FONT[s.font].mono && !hard.type) s.tracking = Math.max(-2, Math.min(2, s.tracking));
+
+  if (!locks.layout) layout(s, rnd, pick, between, chance);
+  if (!locks.picture) {
+    s.imgMode = chance(0.5) ? "bleed" : pick(["panel", "panel", "band", "circle", "split", "inset", "top", "arch"]);
+    s.imgTone = pick(["ink", "ink", "accent", "original"]); s.dim = s.imgMode === "bleed" ? between(35, 70) : between(0, 40);
+    s.imgPosterize = chance(0.18) ? between(2, 5) : 0; s.imgContrast = between(90, 140, 5);
+    s.imgBlur = chance(0.15) ? between(6, 30) : 0;
+    s.imgBoxSize = 100; s.imgBoxX = 0; s.imgBoxY = 0;
+    placePicture(s, rnd, pick, between, chance, hard);
+  }
   if (!locks.backdrop) {
-    s.wash = chance(0.35) ? pick(["top", "bottom", "radial", "diagonal"]) : "none"; s.washAmt = between(25, 70);
-    s.shape = chance(0.4) ? pick(["circle", "ring", "square", "half", "bars"]) : "none";
-    s.shapeAmt = between(40, 95); s.shapeSize = between(35, 90); s.shapeX = between(20, 85); s.shapeY = between(20, 80);
+    const pic = s.imgMode === "bleed";
+    s.wash = chance(0.35) ? pick(["top", "bottom", "radial", "diagonal"]) : "none"; s.washAmt = between(25, pic ? 55 : 70);
+    s.shape = chance(pic ? 0.2 : 0.42) ? pick(["circle", "ring", "square", "half", "bars", "circle", "ring"]) : "none";
+    s.shapeAmt = between(40, pic ? 65 : 95); s.shapeSize = between(35, 85); s.shapeX = between(20, 85); s.shapeY = between(20, 80);
     s.shapeColor = chance(0.75) ? "accent" : "ink";
     s.texture = chance(0.3) ? pick(["halftone", "lines", "grid"]) : "none"; s.textureAmt = between(25, 75);
     s.grain = between(8, 55); s.vignette = between(15, 75);
   }
+  repair(s, hard, rnd, pick, between, chance, locks);
   return s;
 }
 
-/* "More like this": keep most of a look and re-roll one or two groups, nudging the rest. */
+/* ---------- layout: a preset with some play, or a freeform stack ---------- */
+function layout(s, rnd, pick, between, chance) {
+  s.titleAlign = s.artistAlign = s.footerAlign = s.motifAlign = ""; s.titleX = s.artistX = s.footerX = s.motifX = 0;
+  s.artistRotate = chance(0.1) ? pick(["left", "right"]) : "none";
+  const rotated = s.artistRotate !== "none";
+  s.footerPos = !rotated && chance(0.15) ? "top" : "bottom";
+  if (chance(0.55)) {
+    const name = pick(Object.keys(LAYOUTS)), L = LAYOUTS[name]; LAYOUT_KEYS.forEach(k => { s[k] = L[k]; });
+    s.margin = Math.max(7, Math.min(15, L.margin + between(-2, 3)));
+    s.titleSize = Math.round(L.titleSize * between(88, 114) / 100); s.titleDy += between(-3, 3);
+    if (L.artistY < 30) { const d = between(-2, 3, 0.5); s.artistY += d; s.motifY += d; }
+    if (s.footerPos === "top") s.footerY = between(5.5, 7.5, 0.5); else s.footerY = Math.max(L.footerY, between(91.5, 95, 0.5));
+  } else freeform(s, rnd, pick, between, chance);
+  if (FONT[s.font] && FONT[s.font].mono) s.titleSize = Math.min(s.titleSize, 110);
+  if (chance(0.16)) s.artistAlign = s.motifAlign = pick(["left", "centre", "right"].filter(a => a !== s.align));
+  if (chance(0.12)) s.footerAlign = pick(["left", "centre", "right"]);
+}
+
+/* Builds a vertical rhythm: an artist+motif block and the title, stacked in one of a few orders. */
+function freeform(s, rnd, pick, between, chance) {
+  s.align = pick(["left", "left", "centre", "right"]); s.margin = between(8, 14);
+  s.titleSize = between(82, 128);
+  s.footerY = s.footerPos === "top" ? between(5.5, 7.5, 0.5) : between(91.5, 95, 0.5);
+  const T0 = Math.max(9.5, s.footerPos === "top" ? s.footerY + 5 : 0, (s.frameInset || 4) + 5);
+  let B0 = s.footerPos === "top" ? 93 : s.footerY - 4.5;
+  if (s.barcode && s.align !== "left") B0 = Math.min(B0, 83);
+  const a = artistH(s), m = motifH(s), gap = between(1.6, 3.2, 0.1), artistFirst = !m || chance(0.7);
+  const blockH = a * 1.05 + (m ? gap + m : 0);
+  const putBlock = (top) => {
+    if (artistFirst) { s.artistY = top + a * 0.8; s.motifY = s.artistY + a * 0.25 + gap; }
+    else { s.motifY = top; s.artistY = top + m + gap + a * 0.8; }
+  };
+  // what the renderer needs above the title so it never shrinks it to make room
+  const needAbove = () => Math.max(s.artistRotate === "none" ? s.artistY + 10.2 : 0, m ? s.motifY + m + 5.4 : 0);
+  let recipe = pick(["top", "top", "top", "under", "over", "base"]);
+  for (let tries = 0; tries < 6; tries++) {
+    const t = titleEst(s) || { h: 0, desc: 0, above: 0 };
+    let ok = true, tb;
+    if (recipe === "top") {
+      putBlock(T0 + between(0, 4, 0.5));
+      const lo = needAbove() + t.above + t.h + between(0, 3), hi = B0 - t.desc - 1;
+      tb = lo + (hi - lo) * pick([0.3, 0.55, 0.8, 1]); ok = lo <= hi;
+    } else if (recipe === "under" || recipe === "base") {
+      tb = T0 + between(0, 10) + t.above + t.h;
+      const top = recipe === "under" ? tb + t.desc + between(4, 8) : B0 - blockH - between(0, 3);
+      putBlock(top); ok = top >= tb + t.desc + 4 && top + blockH <= B0;
+    } else {   // over: the block sits right above a low title
+      tb = B0 - t.desc - between(0, 6); const top = tb - t.h - t.above;
+      if (artistFirst) { s.motifY = top - 5.4 - (m ? m : 0) - between(0, 2, 0.5); s.artistY = m ? s.motifY - gap - a * 0.25 : top - 10.2; s.artistY = Math.min(s.artistY, top - 10.2); if (m) s.motifY = Math.max(s.motifY, s.artistY + a * 0.25 + gap); }
+      else { s.artistY = top - 10.2 - between(0, 2, 0.5); s.motifY = s.artistY - a * 0.8 - gap - m; }
+      ok = Math.min(s.artistY - a * 0.8, m ? s.motifY : 100) >= T0;
+    }
+    if (ok) {
+      const pos = Object.keys(TITLE_BASE).reduce((p, q) => Math.abs(TITLE_BASE[q] - tb) < Math.abs(TITLE_BASE[p] - tb) ? q : p, "centre");
+      s.titlePos = pos; s.titleDy = Math.round((tb - TITLE_BASE[pos]) * 2) / 2;
+      s.artistY = Math.round(s.artistY * 10) / 10; s.motifY = Math.round(s.motifY * 10) / 10;
+      return;
+    }
+    if (tries >= 1) recipe = "top";
+    s.titleSize = Math.max(55, Math.round(s.titleSize * 0.86));
+  }
+  // nothing fitted (very long words): the classic stack, the renderer shrinks the title to suit
+  putBlock(T0); s.titlePos = "lower"; s.titleDy = Math.round((B0 - 3 - 81.5) * 2) / 2;
+}
+
+/* ---------- picture placement ---------- */
+function placePicture(s, rnd, pick, between, chance, hard) {
+  const SR = window.SleeveRender; if (!SR) return;
+  const r = rects(s), text = [[r.title, 1], [r.artist, 3], [r.motif, 2], [r.footer, 3], [r.year, 2], [r.barcode, 3]];
+  const score = () => { const b = SR.imageBox(s, 100); return text.reduce((t, [q, w]) => t + overlap(b, q, 2) * w, 0); };
+  if (s.imgMode === "panel") {
+    // try corners and sizes; keep the placement that covers the least type
+    let best = null;
+    for (const k of [0.8, 0.9, 1, 1.12]) for (const [cx, cy] of [[1, 0], [0, 0], [1, 1], [0, 1]]) {
+      const w = 37 * k, mg = 7 + rnd() * 4;
+      s.imgBoxSize = Math.round(k * 100);
+      s.imgBoxX = Math.round((cx ? 100 - mg - w / 2 : mg + w / 2) - 70.5); s.imgBoxY = Math.round((cy ? 100 - mg - w / 2 - 6 : mg + w / 2) - 29.5);
+      const sc = score() + rnd() * 2 - k * 3;
+      if (!best || sc < best.sc) best = { sc, size: s.imgBoxSize, x: s.imgBoxX, y: s.imgBoxY };
+    }
+    s.imgBoxSize = best.size; s.imgBoxX = best.x; s.imgBoxY = best.y;
+    if (best.sc > 60) s.imgMode = "bleed";   // nowhere clean: fall back to a full-bleed picture
+  } else if (s.imgMode === "split") {
+    // the picture takes the half the type is not aligned to
+    s.imgBoxX = s.align === "left" ? 50 : s.align === "right" ? 0 : pick([0, 50]);
+    if (s.align === "centre" && !hard.layout) { s.align = s.imgBoxX ? "left" : "right"; }
+  } else if (["circle", "inset", "arch"].includes(s.imgMode)) {
+    s.imgBoxSize = between(82, 108); s.imgBoxY = between(-4, 4);
+  }
+  if (s.imgMode === "bleed") { s.dim = Math.max(s.dim, 35); s.imgBoxSize = 100; s.imgBoxX = s.imgBoxY = 0; }
+}
+
+/* ---------- repair: collisions, legibility ---------- */
+function repair(s, hard, rnd, pick, between, chance, locks) {
+  const a = artistH(s), m = motifH(s);
+  // Artist and motif must not touch: slide the motif off the artist, keeping their order.
+  if (!hard.layout && m && s.artistRotate === "none") {
+    const aTop = s.artistY - a * 0.8, aBot = s.artistY + a * 0.25;
+    if (s.motifY < aBot + 1.2 && s.motifY + m > aTop - 1.2) {
+      if (s.motifY + m / 2 >= s.artistY - a * 0.3) s.motifY = Math.round((aBot + 1.8) * 10) / 10;
+      else s.motifY = Math.round((aTop - 1.8 - m) * 10) / 10;
+    }
+  }
+  // Footer at the top: everything else starts below it.
+  if (!hard.layout && s.footerPos === "top") {
+    const tops = [s.artistRotate === "none" ? s.artistY - a * 0.8 : 100, m ? s.motifY : 100, s.plate && s.platePos !== "br" ? Math.max(6, s.motifY) : 100];
+    const d = s.footerY + 3.5 - Math.min(...tops);
+    if (d > 0) {
+      const tb = titleBottom(s);
+      if (s.artistY < tb) s.artistY = Math.round((s.artistY + d) * 10) / 10;
+      if (m && s.motifY < tb) s.motifY = Math.round((s.motifY + d) * 10) / 10;
+    }
+  }
+  if (s.frame && !hard.layout && s.margin < s.frameInset + 3.5) s.margin = Math.ceil(s.frameInset + 3.5);
+  // Title: clear of whatever sits below it, and of the barcode.
+  if (!hard.layout) {
+    const t = titleEst(s);
+    if (t) {
+      const tb = titleBottom(s), below = [];
+      if (s.artistRotate === "none" && s.artistY > tb) below.push(s.artistY - a * 0.8);
+      if (m && s.motifY > tb) below.push(s.motifY);
+      if (s.footerPos !== "top") below.push(s.footerY - 2.2);
+      const r = rects(s);
+      if (r.barcode && r.title && overlap(r.title, r.barcode)) below.push(r.barcode.y);
+      const lim = Math.min(...below) - 2.5, over = tb + t.desc - lim;
+      if (over > 0) s.titleDy = Math.round((s.titleDy - over) * 2) / 2;
+      // and not pushed off the top: shrink rather than climb past the artist block
+      for (let i = 0; i < 6; i++) {
+        const t2 = titleEst(s), top = titleBottom(s) - t2.h - t2.above;
+        const need = Math.max(8, s.artistRotate === "none" && s.artistY < titleBottom(s) ? s.artistY + 10.2 : 0, m && s.motifY < titleBottom(s) ? s.motifY + m + 5.4 : 0);
+        if (top >= need - 0.5 || s.titleSize <= 50) break;
+        s.titleSize = Math.max(50, Math.round(s.titleSize * 0.9));
+      }
+    }
+  }
+  const r = rects(s);
+  // Backdrop shape behind the title must not swallow it.
+  if (!hard.backdrop && s.shape !== "none" && r.title) {
+    const bg = hexToRgb(s.bg), tc = textRgb(s, "titleColor"), rad = s.shapeSize / 2;
+    const shapeRect = () => R(s.shapeX - rad, s.shapeY - rad, rad * 2, s.shape === "half" ? rad : rad * 2);
+    const ok = () => s.titleStyle === "block" || !overlap(shapeRect(), r.title) ||
+      contrast(tc, mixRgb(bg, hexToRgb(s.shapeColor === "ink" ? s.ink : s.accent), s.shapeAmt / 100)) >= 2.6;
+    if (!ok()) s.shapeColor = s.shapeColor === "ink" ? "accent" : "ink";
+    while (!ok() && s.shapeAmt > 30) s.shapeAmt -= 5;
+    if (!ok() || (s.shape === "bars" && ["echo", "outline"].includes(s.titleStyle) && overlap(shapeRect(), r.title))) s.shape = "none";
+  }
+  if (!hard.backdrop && s.wash !== "none") {
+    const bg = hexToRgb(s.bg), tc = textRgb(s, "titleColor"), ac = hexToRgb(s.accent);
+    while (s.washAmt > 15 && contrast(tc, mixRgb(bg, ac, 0.9 * s.washAmt / 100)) < 3) s.washAmt -= 5;
+  }
+  // Type over the picture: dim it (or re-tone it) until the worst spot still reads.
+  if (!hard.picture && window.SleeveRender) {
+    const box = SleeveRender.imageBox(s, 100), need = [];
+    if (r.title && s.titleStyle !== "block" && overlap(box, r.title)) need.push([textRgb(s, "titleColor"), ["outline", "echo"].includes(s.titleStyle) ? 3.2 : 2.6]);
+    if (r.artist && overlap(box, r.artist)) need.push([textRgb(s, "artistColor"), 3.0]);
+    if (r.footer && overlap(box, r.footer)) need.push([textRgb(s, "footerColor"), 2.4]);
+    if (need.length) {
+      const cap = s.imgMode === "bleed" ? 85 : 100;
+      const dimFor = () => { let d = s.dim; while (d < cap && need.some(([c, t]) => picContrast(s, c, d) < t)) d += 5; return Math.min(cap, d); };
+      let d = dimFor();
+      if (d >= cap - 10 && !locks.picture) {
+        const tone0 = s.imgTone; let best = [d, tone0];
+        for (const tone of ["accent", "ink", "original"]) { s.imgTone = tone; const dd = dimFor(); if (dd < best[0] - 5) best = [dd, tone]; }
+        s.imgTone = best[1]; d = best[0];
+      }
+      s.dim = d;
+    }
+  }
+  // Label mark and catalogue plate: only where there is room.
+  if (!hard.border) {
+    const name = String(s.label || "").trim();
+    if (s.labelMark !== "logo") {
+      s.labelMark = "none";
+      if (name && chance(0.3)) {
+        const kind = pick(["text", "text", "box", "stamp"]), k = between(80, 110, 5) / 100;
+        const w = kind === "stamp" ? 8.4 * k : Math.min(40, [...name].length * 1.45 * k * 0.9 + (kind === "box" ? 2.4 * k : 0)), h = kind === "stamp" ? 8.4 * k : 3 * k;
+        const busy = Object.values(rects(s));
+        const spots = [[100 - s.margin - w / 2, 100 - s.margin * 0.75 - h / 2], [s.margin + w / 2, 100 - s.margin * 0.75 - h / 2],
+          [100 - s.margin - w / 2, s.margin * 0.75 + h / 2], [s.margin + w / 2, s.margin * 0.75 + h / 2]];
+        const start = Math.floor(rnd() * 4);
+        for (let i = 0; i < 4; i++) {
+          const [cx, cy] = spots[(start + i) % 4];
+          if (busy.every(b => !overlap(R(cx - w / 2, cy - h / 2, w, h), b, 2))) {
+            s.labelMark = kind; s.labelSize = Math.round(k * 100); s.labelX = Math.round(cx * 2) / 2; s.labelY = Math.round(cy * 2) / 2;
+            s.labelColor = chance(0.25) ? "accent" : "ink"; s.labelOpacity = between(60, 90, 5); break;
+          }
+        }
+      }
+    }
+    s.plate = false;
+    if (String(s.catalog || s.plateText || "").trim() && chance(0.14)) {
+      const busy = Object.values(rects(s)), label = s.labelMark !== "none" ? R(s.labelX - 5, s.labelY - 5, 10, 10) : null;
+      const w = Math.min(30, [...String(s.plateText || s.catalog)].length * 1.6 * 0.9 + 2.4);
+      const tr = R(100 - s.margin - w, Math.max(6, s.motifY), w, 3.2);
+      if (busy.every(b => !overlap(tr, b, 2)) && !overlap(tr, label, 2)) { s.plate = true; s.platePos = "tr"; }
+      else if (s.footerPos !== "top") {
+        const br = R(100 - s.margin - w, (r.barcode ? r.barcode.y - 1.4 : 93.5) - 3.2, w, 3.2);
+        if (busy.filter(b => b !== r.footer).every(b => !overlap(br, b, 1.5)) && !overlap(br, label, 2)) { s.plate = true; s.platePos = "br"; }
+      }
+    }
+  }
+}
+
+/* "More like this": a clear step in one direction (palette, type, layout or picture), sometimes with a lighter
+   change to motif, border or backdrop. Colour and type changes stay related half the time. */
 const GROUPS = ["colour", "type", "layout", "motif", "border", "backdrop", "picture"];
 function mutate(state, seed, locks = {}, opts = {}) {
-  const rnd = mulberry32((seed * 40503 + 17) >>> 0), free = GROUPS.filter(g => !locks[g]);
-  if (!free.length) return { ...state };
-  const n = rnd() < 0.55 ? 1 : 2, change = new Set();
-  while (change.size < Math.min(n, free.length)) change.add(free[Math.floor(rnd() * free.length)]);
+  const rnd = mulberry32((seed * 40503 + 17) >>> 0);
+  const major = [["colour", 3], ["type", 3], ["layout", 2.5], ["picture", 1.5]].filter(([g]) => !locks[g]);
+  const minor = ["motif", "border", "backdrop"].filter(g => !locks[g]);
+  if (!major.length && !minor.length) return { ...state };
+  const change = new Set(), wpick = (list) => { let t = rnd() * list.reduce((a, [, w]) => a + w, 0); for (const [g, w] of list) if ((t -= w) <= 0) return g; return list[0][0]; };
+  if (major.length) change.add(wpick(major));
+  if (major.length > 1 && rnd() < 0.15) change.add(wpick(major.filter(([g]) => !change.has(g))));
+  if (minor.length && (!major.length || rnd() < 0.5)) change.add(minor[Math.floor(rnd() * minor.length)]);
   const keep = Object.fromEntries(GROUPS.map(g => [g, !change.has(g)]));
-  const s = randomize(state, seed, keep, opts);
-  // small nudges so even "kept" groups breathe a little
-  const nudge = (k, d, lo, hi) => { if (typeof s[k] === "number") s[k] = Math.max(lo, Math.min(hi, Math.round((s[k] + (rnd() * 2 - 1) * d) * 2) / 2)); };
-  if (!locks.layout) { nudge("titleDy", 2, -30, 20); nudge("margin", 1, 5, 20); }
-  if (!locks.type) { nudge("titleSize", 6, 40, 140); nudge("tracking", 2, -8, 30); }
-  if (!locks.backdrop) { nudge("shapeX", 8, 0, 100); nudge("shapeY", 8, 0, 100); nudge("grain", 8, 0, 100); }
+  const o = { ...opts, hard: locks };
+  if (change.has("colour") && rnd() < 0.5) {
+    // a sibling palette: same family of ground, hue nudged
+    const bg = hexToRgb(state.bg), [h] = rgbToHsl(bg), L = SP.relLum(bg);
+    o.hue = (h + (rnd() * 70 - 35) + 360) % 360; o.paletteMode = L < 0.06 ? "dark" : L > 0.45 ? "light" : "bold";
+  }
+  if (change.has("type") && (!opts.feel || opts.feel === "any") && rnd() < 0.5 && FONT[state.font]) o.feel = FONT[state.font].feel;
+  const s = randomize(state, seed * 7 + 3, keep, o);
+  const nudge = (k, d, lo, hi) => { if (typeof s[k] === "number") s[k] = Math.max(lo, Math.min(hi, Math.round(s[k] + (rnd() * 2 - 1) * d))); };
+  if (!locks.backdrop) { nudge("grain", 8, 0, 100); nudge("vignette", 8, 0, 100); }
   return s;
 }
 

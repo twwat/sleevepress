@@ -15,9 +15,9 @@
   position: relative; display: grid; place-items: center; height: 150px; padding: 14px; border: 0; border-bottom: 1px solid var(--rule);
   background: radial-gradient(circle at 50% 40%, #2a261f, var(--room) 75%); width: 100%;
 }
-.view-print .pr-thumb { display: block; max-width: 100%; max-height: 100%; height: 100%; aspect-ratio: 1; box-shadow: 0 10px 24px -8px rgba(0,0,0,.8); }
-.view-print .pr-thumb.round { border-radius: 50%; overflow: hidden; }
-.view-print .pr-thumb canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+.view-print .pr-thumb { display: flex; align-items: center; justify-content: center; width: 100%; height: 122px; min-width: 0; }
+.view-print .pr-thumb canvas { display: block; max-width: 100%; max-height: 122px; width: auto; height: auto; box-shadow: 0 10px 24px -8px rgba(0,0,0,.8); }
+.view-print .pr-thumb.round canvas { border-radius: 50%; }
 .view-print .pr-card:not(.on) .pr-thumb { opacity: .55; filter: saturate(.6); }
 .view-print .pr-pick:hover .pr-thumb { opacity: 1; filter: none; }
 .view-print .pr-tick {
