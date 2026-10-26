@@ -1,0 +1,97 @@
+/* Design view: sleeve on the left, one-subject inspector on the right. */
+.view-design .dz-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: 28px; align-items: start; }
+@media (max-width: 900px) { .view-design .dz-wrap { grid-template-columns: minmax(0, 1fr); } }
+.view-design .dz-stage { min-width: 0; display: grid; gap: 12px; position: sticky; top: 64px; }
+@media (max-width: 900px) { .view-design .dz-stage { position: static; } }
+.view-design .dz-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.view-design .dz-seed { display: inline-flex; align-items: center; gap: 2px; font: 12px var(--f-mono); color: var(--chalk-dim); }
+.view-design .dz-seed span { padding: 0 6px; min-width: 52px; text-align: center; }
+.view-design .dz-locks { gap: 4px; align-items: center; }
+.view-design .dz-locks .legend { margin-right: 2px; }
+.view-design .dz-locks .chip-b { padding: 3px 7px; font-size: 11px; }
+.view-design .dz-sleeve { position: relative; width: min(100%, 78vh, 760px); margin: 0 auto; background: #000; box-shadow: 0 30px 60px -20px rgba(0,0,0,.8), 0 0 0 1px rgba(255,255,255,.04); }
+.view-design .dz-sleeve canvas { display: block; width: 100%; height: auto; }
+.view-design .dz-overlay { position: absolute; inset: 0; touch-action: none; outline: none; }
+.view-design .dz-overlay:focus-visible { outline: 2px solid var(--lamp-soft); outline-offset: 3px; }
+.view-design .dz-hover, .view-design .dz-sel { position: absolute; pointer-events: none; border: 1px dashed rgba(255,255,255,.55); mix-blend-mode: difference; }
+.view-design .dz-sel { border: 1.5px solid #fff; }
+.view-design .dz-sel span { position: absolute; top: -20px; left: -1px; font: 10px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; background: #fff; color: #000; padding: 1px 5px; white-space: nowrap; }
+.view-design .dz-editor { position: absolute; inset: 0; pointer-events: none; }
+.view-design .dz-inline {
+  position: absolute; pointer-events: auto; min-height: 0; resize: none; background: rgba(10,9,7,.88); color: #fff; border: 1.5px solid #fff;
+  font-weight: 700; line-height: 1.15; padding: 6px 8px; box-shadow: 0 10px 30px rgba(0,0,0,.6);
+}
+.view-design .dz-foot { width: min(100%, 78vh, 760px); margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
+.view-design .dz-dl { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.view-design .dz-dl output { font: 11px var(--f-mono); color: var(--chalk-faint); overflow-wrap: anywhere; }
+.view-design .dz-dl select { width: auto; padding: 5px 8px; font-size: 12px; }
+.view-design .dz-vars { border: 1px solid var(--rule-strong); background: var(--bench); padding: 10px; display: grid; gap: 8px; }
+.view-design .dz-varhead { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.view-design .dz-varhead .legend { flex: 1; }
+.view-design .dz-vargrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.view-design .dz-vargrid > button { position: relative; padding: 0; border: 1px solid var(--rule); background: #000; }
+.view-design .dz-vargrid > button:hover { border-color: var(--chalk-dim); }
+.view-design .dz-vargrid canvas { display: block; width: 100%; height: auto; }
+.view-design .dz-varflag { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; font-size: 12px; }
+
+.view-design .dz-side { min-width: 0; display: grid; gap: 10px; }
+.view-design .dz-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.view-design .dz-tabs button {
+  background: var(--room); border: 1px solid var(--rule-strong); border-radius: 2px; color: var(--chalk-dim);
+  font: 12px var(--f-mono); letter-spacing: .04em; padding: 6px 9px; min-height: 32px;
+}
+.view-design .dz-tabs button:hover { color: var(--chalk); border-color: var(--chalk-faint); }
+.view-design .dz-tabs button[aria-selected=true] { background: var(--chalk); color: var(--room); border-color: var(--chalk); font-weight: 500; }
+.view-design .dz-panel { display: grid; gap: 10px; scroll-margin-top: 70px; }
+.view-design .dz-group { border: 1px solid var(--rule); background: var(--bench); padding: 12px 14px 14px; display: grid; gap: 12px; min-width: 0; }
+.view-design .dz-group h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--chalk-dim); }
+.view-design .dz-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+.view-design .dz-row > * { flex: 1 1 140px; min-width: 0; }
+.view-design .dz-row > .btn { flex: 0 0 auto; }
+.view-design .f { display: grid; gap: 5px; min-width: 0; }
+.view-design .seg button { min-height: 32px; }
+.view-design .dz-dot { display: inline-flex; align-items: center; gap: 6px; }
+.view-design .dz-dot::before { content: ""; width: 10px; height: 10px; border: 1px solid rgba(255,255,255,.3); background: var(--c, #888); }
+.view-design .hint.warn { color: var(--warn); }
+
+/* visual pickers */
+.view-design .dz-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 6px; }
+.view-design .dz-pick.wide { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
+.view-design .dz-pick button { display: grid; gap: 3px; padding: 3px; background: var(--room); border: 1px solid var(--rule-strong); border-radius: 2px; color: var(--chalk-faint); }
+.view-design .dz-pick button:hover { border-color: var(--chalk-faint); color: var(--chalk); }
+.view-design .dz-pick button[aria-pressed=true] { border-color: var(--chalk); color: var(--chalk); box-shadow: 0 0 0 1px var(--chalk); }
+.view-design .dz-pick canvas { width: 100%; height: auto; display: block; }
+.view-design .dz-pick small { font: 10px var(--f-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-design .dz-fonts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-height: 232px; overflow: auto; padding-right: 4px; }
+.view-design .dz-fonts button { text-align: left; background: var(--room); border: 1px solid var(--rule-strong); border-radius: 2px; color: var(--chalk-dim); font-size: 15px; padding: 6px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 34px; }
+.view-design .dz-fonts button:hover { color: var(--chalk); border-color: var(--chalk-faint); }
+.view-design .dz-fonts button[aria-pressed=true] { background: var(--chalk); color: var(--room); border-color: var(--chalk); }
+
+/* colour */
+.view-design .dz-swatches { display: grid; gap: 8px; }
+.view-design .dz-sw { display: grid; grid-template-columns: 48px 1fr auto; gap: 10px; align-items: center; }
+.view-design .dz-sw input[type=color] { width: 48px; height: 44px; }
+.view-design .dz-sw b { display: block; font-size: 11px; font-family: var(--f-mono); color: var(--chalk-dim); font-weight: 400; margin-bottom: 2px; }
+.view-design .dz-sw input[type=text] { padding: 5px 8px; }
+.view-design .dz-ratio { font: 11px var(--f-mono); padding: 2px 6px; border: 1px solid var(--rule-strong); }
+.view-design .dz-ratio.ok { color: var(--ok); border-color: var(--ok); }
+.view-design .dz-ratio.bad { color: var(--lamp-soft); border-color: var(--lamp-soft); }
+.view-design .dz-pals { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 6px; max-height: 260px; overflow: auto; padding-right: 4px; }
+.view-design .dz-pal { display: grid; gap: 3px; padding: 3px; background: var(--room); border: 1px solid var(--rule-strong); border-radius: 2px; color: var(--chalk-faint); text-align: left; }
+.view-design .dz-pal:hover { border-color: var(--chalk-faint); color: var(--chalk); }
+.view-design .dz-pal i { position: relative; display: block; height: 34px; }
+.view-design .dz-pal i b { position: absolute; left: 6px; right: 40%; bottom: 7px; height: 5px; }
+.view-design .dz-pal i u { position: absolute; right: 6px; top: 6px; width: 10px; height: 10px; }
+.view-design .dz-pal small { font: 10px var(--f-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-design .dz-frompic { display: grid; gap: 8px; }
+.view-design .dz-raw { display: flex; flex-wrap: wrap; gap: 6px; }
+.view-design .dz-rawsw { display: grid; grid-template-columns: repeat(3, 1fr); width: 72px; border: 1px solid var(--rule-strong); }
+.view-design .dz-rawsw i { grid-column: 1 / -1; height: 26px; }
+.view-design .dz-rawsw button { background: var(--room); border: 0; border-top: 1px solid var(--rule-strong); color: var(--chalk-dim); font: 10px var(--f-mono); padding: 4px 0; min-height: 26px; }
+.view-design .dz-rawsw button:hover { color: var(--chalk); background: var(--bench); }
+.view-design .dz-meta { font: 11px var(--f-mono); color: var(--chalk-faint); align-self: center; }
+.view-design .dz-layouts { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.view-design .dz-layouts button { padding: 3px; background: var(--room); border: 1px solid var(--rule-strong); display: grid; gap: 3px; color: var(--chalk-faint); }
+.view-design .dz-layouts button:hover { border-color: var(--chalk-dim); color: var(--chalk); }
+.view-design .dz-layouts canvas { width: 100%; height: auto; display: block; }
+.view-design .dz-layouts small { font: 10px var(--f-mono); }

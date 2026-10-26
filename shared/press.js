@@ -1,6 +1,6 @@
 /* Sleeve Press: shared core.
-   One release record (release.json) lives in localStorage and is read/written by every tool.
-   Export/import it from any page to carry a release between browsers or machines. */
+   One release record lives in memory for the whole app and is written through to the browser.
+   Pictures and the library live in IndexedDB; release.json / library backups carry them between machines. */
 (function () {
 "use strict";
 
@@ -8,21 +8,12 @@ const KEY = "sleevepress.release.v1";
 const IMG_KEY = "sleevepress.image.v1";
 const SCHEMA = "sleevepress.release/1";
 
-const TOOLS = [
-  ["index.html", "Desk"],
-  ["sleeve-press.html", "Sleeve"],
-  ["tracklist.html", "Tracklist"],
-  ["style-forge.html", "Style"],
-  ["title-lab.html", "Titles"],
-  ["palette-pull.html", "Palette"],
-  ["release-kit.html", "Kit"],
-];
-
 const DEFAULT = () => ({
   schema: SCHEMA,
   release: {
     artist: "DUPPY WIRE", title: "NINE\nNIGHT", catalog: "DPWR-001", year: "",
-    footer: "DUPPY WIRE SOUND · KGN — N17 · DPWR-001", format: "EP",
+    footer: "KGN — N17 · DPWR-001", format: "EP", label: "DUPPY WIRE SOUND",
+    date: "", cta: "OUT NOW", links: "Spotify · Apple Music · Bandcamp",
   },
   palette: { bg: "#15120f", ink: "#ece6da", accent: "#9b1b1e", name: "Nine Night", swatches: [], words: "" },
   tracks: [],      // [{ title, feat, bpm, key, length, side }]
@@ -31,7 +22,9 @@ const DEFAULT = () => ({
   style: {},       // Style Forge state + generated prompt/exclude/structure/batch
   names: { shortlist: [], seed: 1 },
   kit: { series: [], sizes: null },
-  looks: [],       // saved looks: [{ name, look: {sleeve keys + bg/ink/accent} }]
+  looks: [],       // flagged looks: [{ id, name, look: {sleeve look keys + bg/ink/accent}, ts }]
+  print: {},       // Print settings
+  promo: {},       // Export/promo settings
 });
 
 /* ---------- utils ---------- */
@@ -115,7 +108,41 @@ async function copy(text, label) {
 }
 const canvasBlob = (c, type = "image/png", q) => new Promise(res => c.toBlob(res, type, q));
 
-/* ---------- the release record ---------- */
+/* ---------- vault: IndexedDB key/value for images and the library, memory if the browser refuses ---------- */
+const mem = new Map();
+let idbP = null;
+function idb() {
+  if (idbP) return idbP;
+  idbP = new Promise(res => {
+    try {
+      const r = indexedDB.open("sleevepress", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null);
+    } catch (e) { res(null); }
+  });
+  return idbP;
+}
+const vault = {
+  async get(k) {
+    const d = await idb(); if (!d) return mem.get(k);
+    return new Promise(res => { try { const q = d.transaction("kv").objectStore("kv").get(k); q.onsuccess = () => res(q.result ?? mem.get(k)); q.onerror = () => res(mem.get(k)); } catch (e) { res(mem.get(k)); } });
+  },
+  async set(k, v) {
+    mem.set(k, v); const d = await idb(); if (!d) { setStatus("memory"); return false; }
+    return new Promise(res => { try { const t = d.transaction("kv", "readwrite"); t.objectStore("kv").put(v, k); t.oncomplete = () => res(true); t.onerror = t.onabort = () => { setStatus("memory"); res(false); }; } catch (e) { setStatus("memory"); res(false); } });
+  },
+  async del(k) {
+    mem.delete(k); const d = await idb(); if (!d) return;
+    return new Promise(res => { try { const t = d.transaction("kv", "readwrite"); t.objectStore("kv").delete(k); t.oncomplete = () => res(); t.onerror = t.onabort = () => res(); } catch (e) { res(); } });
+  },
+};
+
+/* Where work is being kept: "browser" (survives reloads) or "memory" (lost on reload; use Backup). */
+let status = "browser";
+const statusListeners = new Set();
+function setStatus(s) { if (s === status) return; status = s; statusListeners.forEach(fn => fn(s)); }
+
+/* ---------- the release record (one, in memory; written through to the browser) ---------- */
 let db = null;
 const listeners = new Set();
 function mergeDefaults(saved) {
@@ -127,90 +154,88 @@ function mergeDefaults(saved) {
     else if (d[k] && typeof d[k] === "object") { if (saved[k] && typeof saved[k] === "object") d[k] = { ...d[k], ...saved[k] }; }
     else if (typeof saved[k] === typeof d[k]) d[k] = saved[k];
   }
+  if (typeof saved.libId === "string") d.libId = saved.libId;   // which saved release this came from
   return d;
 }
 function load() {
-  try { const raw = localStorage.getItem(KEY); if (raw) { db = mergeDefaults(JSON.parse(raw)); return db; } } catch (e) {}
+  try { const raw = localStorage.getItem(KEY); if (raw) { db = mergeDefaults(JSON.parse(raw)); return db; } } catch (e) { setStatus("memory"); }
   db = DEFAULT(); return db;
 }
-function persist() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast("Couldn't save to this browser; export release.json to keep your work."); } }
-function emit(external) { listeners.forEach(fn => { try { fn(db, external); } catch (e) { console.error(e); } }); updateRelBar(); }
+const persistSoon = (() => { let h; return () => { clearTimeout(h); h = setTimeout(persist, 150); }; })();
+function persist() {
+  try { localStorage.setItem(KEY, JSON.stringify(db)); }
+  catch (e) { vault.set("record", clone(db)).then(ok => { if (!ok) setStatus("memory"); }); }
+}
+function emit(external) { listeners.forEach(fn => { try { fn(db, external); } catch (e) { console.error(e); } }); }
 const get = () => db || load();
-function set(section, value) { get(); db[section] = value; persist(); emit(false); }
-function patch(section, p) { get(); db[section] = { ...db[section], ...p }; persist(); emit(false); }
+function set(section, value) { get(); db[section] = value; persistSoon(); emit(false); }
+function patch(section, p) { get(); db[section] = { ...db[section], ...p }; persistSoon(); emit(false); }
+function replace(record) { db = mergeDefaults(record); persistSoon(); emit(false); }
 function on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-window.addEventListener("storage", (e) => {
-  if (e.key === KEY) { load(); emit(true); }
-  if (e.key === IMG_KEY) { imgPromise = null; imgListeners.forEach(fn => fn()); }
-});
+window.addEventListener("storage", (e) => { if (e.key === KEY) { load(); emit(true); } });
+window.addEventListener("beforeunload", () => { if (db) persist(); });
 
-/* ---------- the cover image (shared, stored downscaled) ---------- */
-let imgPromise = null, memImage = null;
-const imgListeners = new Set();
-const onImage = (fn) => { imgListeners.add(fn); return () => imgListeners.delete(fn); };
-function imageData() { return memImage || (() => { try { return localStorage.getItem(IMG_KEY); } catch (e) { return null; } })(); }
-function image() {
-  if (imgPromise) return imgPromise;
-  const url = imageData();
-  imgPromise = !url ? Promise.resolve(null) : new Promise(res => {
-    const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = url;
-  });
-  return imgPromise;
-}
-async function setImageSource(src, name) {
-  const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
-  const store = (cap, q) => {
-    const s = Math.min(1, cap / Math.max(im.naturalWidth, im.naturalHeight));
-    const c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * s); c.height = Math.round(im.naturalHeight * s);
-    c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
-    return c.toDataURL("image/jpeg", q);
+/* ---------- shared pictures: the cover image and the label logo ---------- */
+function asset(name, cap, mime) {
+  let url = null, meta = null, ready = null, promise = null;
+  const fns = new Set();
+  const changed = () => { promise = null; fns.forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); };
+  const init = () => ready || (ready = (async () => {
+    let v = await vault.get(name);
+    if (!v && name === "image") {   // carry over a cover stored by the older multi-page version
+      try { const old = localStorage.getItem(IMG_KEY); if (old) { v = { url: old, meta: JSON.parse(localStorage.getItem(IMG_KEY + ".meta") || "null") }; vault.set(name, v); localStorage.removeItem(IMG_KEY); } } catch (e) {}
+    }
+    if (v && v.url) { url = v.url; meta = v.meta || null; }
+  })());
+  const api = {
+    async image() {
+      await init(); if (promise) return promise;
+      promise = !url ? Promise.resolve(null) : new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = url; });
+      return promise;
+    },
+    async data() { await init(); return url; },
+    meta: () => meta,
+    async setSource(src, fname) {
+      const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+      const s = Math.min(1, cap / Math.max(im.naturalWidth, im.naturalHeight));
+      const c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * s); c.height = Math.round(im.naturalHeight * s);
+      c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+      url = mime === "image/png" ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.88);
+      meta = { name: fname || name, w: im.naturalWidth, h: im.naturalHeight };
+      await init(); await vault.set(name, { url, meta }); changed();
+    },
+    setFile(file) {
+      if (!file || !file.type.startsWith("image/")) { toast("That isn't an image file."); return Promise.resolve(); }
+      return new Promise(res => {
+        const r = new FileReader();
+        r.onload = () => api.setSource(r.result, file.name).then(res, () => { toast("Couldn't read that image."); res(); });
+        r.readAsDataURL(file);
+      });
+    },
+    async clear() { await init(); url = null; meta = null; await vault.del(name); changed(); },
+    on(fn) { fns.add(fn); return () => fns.delete(fn); },
   };
-  let url = store(2000, 0.86); memImage = null;
-  const meta = { name: name || "image", w: im.naturalWidth, h: im.naturalHeight };
-  try { localStorage.setItem(IMG_KEY, url); }
-  catch (e) {
-    try { url = store(1200, 0.8); localStorage.setItem(IMG_KEY, url); toast("Image stored smaller so it fits this browser."); }
-    catch (e2) { memImage = url; toast("Image is too large to share between tools in this browser; it will only last on this page."); }
-  }
-  try { localStorage.setItem(IMG_KEY + ".meta", JSON.stringify(meta)); } catch (e) {}
-  imgPromise = null; imgListeners.forEach(fn => fn());
+  return api;
 }
-function setImageFile(file) {
-  if (!file || !file.type.startsWith("image/")) { toast("That isn't an image file."); return Promise.resolve(); }
-  return new Promise(res => {
-    const r = new FileReader();
-    r.onload = () => setImageSource(r.result, file.name).then(res, () => { toast("Couldn't read that image."); res(); });
-    r.readAsDataURL(file);
-  });
-}
-function clearImage() {
-  memImage = null;
-  try { localStorage.removeItem(IMG_KEY); localStorage.removeItem(IMG_KEY + ".meta"); } catch (e) {}
-  imgPromise = null; imgListeners.forEach(fn => fn());
-}
-function imageMeta() { try { return JSON.parse(localStorage.getItem(IMG_KEY + ".meta")) || null; } catch (e) { return null; } }
+const cover = asset("image", 2400, "image/jpeg");
+const logo = asset("logo", 900, "image/png");
 
-/* Wire a drop zone + file input + info line to the shared image. */
-function bindImageDrop({ drop, input, text, meta, info, clear }) {
-  const label = "Drop an image here, or tap to choose";
-  const refresh = async () => {
-    const im = await image(); const m = imageMeta();
-    if (meta) meta.hidden = !im;
-    if (info && im) info.textContent = `${(m && m.name) || "image"} · ${im.naturalWidth}×${im.naturalHeight}`;
-    if (text) text.textContent = im ? "Drop another image to replace it" : label;
-  };
-  input.addEventListener("change", e => setImageFile(e.target.files[0]).then(() => { input.value = ""; }));
+/* Wire a drop zone + file input to a shared picture. */
+function bindDrop(target, { drop, input, onText }) {
+  if (input) input.addEventListener("change", e => target.setFile(e.target.files[0]).then(() => { input.value = ""; }));
   ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", e => setImageFile(e.dataTransfer.files[0]));
-  if (clear) clear.addEventListener("click", clearImage);
-  onImage(refresh); refresh();
+  drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) target.setFile(f); });
+  if (onText) { const refresh = async () => onText(await target.image(), target.meta()); target.on(refresh); refresh(); }
 }
 
 /* ---------- import / export ---------- */
 async function exportObject(withImage = true) {
   const o = clone(get()); o.schema = SCHEMA; o.exported = new Date().toISOString();
-  if (withImage) { const url = imageData(); if (url) o.image = { dataUrl: url, ...(imageMeta() || {}) }; }
+  if (withImage) {
+    const u = await cover.data(); if (u) o.image = { dataUrl: u, ...(cover.meta() || {}) };
+    const l = await logo.data(); if (l) o.logo = { dataUrl: l, ...(logo.meta() || {}) };
+  }
   return o;
 }
 async function downloadRelease() {
@@ -222,21 +247,69 @@ async function importObject(o) {
   if (!o || typeof o !== "object" || typeof o.schema !== "string" || !o.schema.startsWith("sleevepress.release/"))
     throw new Error("not a release file");
   db = mergeDefaults(o); persist();
-  if (o.image && o.image.dataUrl) { await setImageSource(o.image.dataUrl, o.image.name); } else { clearImage(); }
+  if (o.image && o.image.dataUrl) await cover.setSource(o.image.dataUrl, o.image.name); else await cover.clear();
+  if (o.logo && o.logo.dataUrl) await logo.setSource(o.logo.dataUrl, o.logo.name);
   emit(false);
 }
-function importFile(file) {
-  return new Promise((res) => {
-    const r = new FileReader();
-    r.onload = async () => {
-      try { await importObject(JSON.parse(r.result)); toast("Release loaded"); }
-      catch (e) { toast("That isn't a release.json from Sleeve Press."); }
-      res();
-    };
-    r.readAsText(file);
-  });
+function readJSON(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => { try { res(JSON.parse(r.result)); } catch (e) { rej(e); } }; r.onerror = rej; r.readAsText(file); });
 }
-function reset() { db = DEFAULT(); persist(); clearImage(); emit(false); }
+async function importFile(file) {
+  try {
+    const o = await readJSON(file);
+    if (o && o.schema === LIB_SCHEMA) { const n = await library.restore(o); toast(`Restored ${n} saved release${n === 1 ? "" : "s"} and your flagged looks`); return "library"; }
+    await importObject(o); toast("Release loaded"); return "release";
+  } catch (e) { toast("That isn't a Sleeve Press file."); return null; }
+}
+async function reset() { const keep = get(); db = DEFAULT(); db.looks = keep.looks; db.release.label = keep.release.label; persist(); await cover.clear(); emit(false); }
+
+/* ---------- the library: saved releases (with their pictures) ---------- */
+const LIB_SCHEMA = "sleevepress.library/1";
+const libListeners = new Set();
+const library = {
+  async list() { return (await vault.get("lib.index")) || []; },
+  on(fn) { libListeners.add(fn); return () => libListeners.delete(fn); },
+  changed() { libListeners.forEach(fn => fn()); },
+  /* Saves the current release. Same id as the one it was opened from = overwrite. */
+  async save(thumbUrl, asNew) {
+    const rec = clone(get()); let id = !asNew && rec.libId;
+    const idx = await library.list(), prev = id && idx.find(e => e.id === id);
+    if (!id || !idx.some(e => e.id === id)) { id = "r" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36); }
+    rec.libId = id; db.libId = id; persistSoon();
+    const auto = [rec.release.artist, titleLine(rec.release)].filter(Boolean).join(" — ") || "Untitled";
+    const entry = { id, name: prev && prev.custom ? prev.name : auto, custom: !!(prev && prev.custom), catalog: rec.release.catalog, updated: Date.now(), thumb: thumbUrl || null };
+    await vault.set("lib." + id, { record: rec, image: await cover.data(), imageMeta: cover.meta() });
+    const next = [entry, ...idx.filter(e => e.id !== id)];
+    await vault.set("lib.index", next); library.changed();
+    return id;
+  },
+  async open(id) {
+    const e = await vault.get("lib." + id); if (!e) return false;
+    const looks = get().looks; db = mergeDefaults(e.record); db.looks = looks; db.libId = id; persist();
+    if (e.image) await cover.setSource(e.image, e.imageMeta && e.imageMeta.name); else await cover.clear();
+    emit(false); return true;
+  },
+  async remove(id) { await vault.del("lib." + id); await vault.set("lib.index", (await library.list()).filter(e => e.id !== id)); library.changed(); },
+  async rename(id, name) { await vault.set("lib.index", (await library.list()).map(e => e.id === id ? { ...e, name, custom: true } : e)); library.changed(); },
+  async records() { const out = []; for (const e of await library.list()) { const r = await vault.get("lib." + e.id); if (r) out.push({ entry: e, ...r }); } return out; },
+  async backup() {
+    const o = { schema: LIB_SCHEMA, exported: new Date().toISOString(), looks: get().looks, label: get().release.label, logo: await logo.data(), releases: await library.records() };
+    download(JSON.stringify(o), `sleevepress_library_${new Date().toISOString().slice(0, 10)}.json`, "application/json");
+  },
+  async restore(o) {
+    const idx = await library.list(); let n = 0;
+    for (const r of o.releases || []) {
+      if (!r.entry || !r.record) continue;
+      await vault.set("lib." + r.entry.id, { record: r.record, image: r.image || null, imageMeta: r.imageMeta || null });
+      idx.splice(0, idx.length, ...[r.entry, ...idx.filter(e => e.id !== r.entry.id)]); n++;
+    }
+    await vault.set("lib.index", idx);
+    const have = new Set(get().looks.map(l => l.id));
+    set("looks", [...get().looks, ...(o.looks || []).filter(l => !have.has(l.id))]);
+    if (o.logo) await logo.setSource(o.logo, "logo");
+    library.changed(); return n;
+  },
+};
 
 /* ---------- tracks ---------- */
 const KEY_RE = /^[A-G][#b♯♭]?\s?(m|min|minor|maj|major|dim|aug)?$/i;
@@ -288,43 +361,7 @@ function fmtTime(s) {
 }
 const runtime = (tracks) => tracks.reduce((a, t) => a + secs(t.length), 0);
 
-/* ---------- nav + release bar ---------- */
-let navMounted = false;
 function titleLine(r) { return (r.title || "").replace(/\s*\n\s*/g, " ").trim(); }
-function updateRelBar() {
-  const el = $("sp-relid"); if (!el) return;
-  const d = get(), r = d.release;
-  el.innerHTML = "";
-  const dot = document.createElement("span"); dot.className = "dot"; dot.style.background = d.palette.bg; dot.style.boxShadow = `inset 0 -4px 0 ${d.palette.ink}, inset -4px 0 0 ${d.palette.accent}`;
-  const b = document.createElement("b"); b.textContent = [r.artist, titleLine(r)].filter(Boolean).join(" — ") || "Untitled release";
-  const s = document.createElement("span");
-  s.textContent = [r.catalog, r.format, d.tracks.length ? `${d.tracks.length} track${d.tracks.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
-  el.append(dot, b, s);
-}
-function mountNav(current) {
-  const host = $("sp-nav"); if (!host || navMounted) return; navMounted = true;
-  host.innerHTML = `
-    <header class="deck">
-      <a class="brand" href="index.html">Sleeve Press</a>
-      <nav aria-label="Tools"></nav>
-    </header>
-    <div class="relbar">
-      <div class="rel-id" id="sp-relid"></div>
-      <div class="btn-row">
-        <button type="button" class="btn" id="sp-export">Export release.json</button>
-        <label class="btn" for="sp-import">Import<input type="file" id="sp-import" accept=".json,application/json" style="display:none"></label>
-      </div>
-    </div>`;
-  const nav = host.querySelector("nav");
-  for (const [href, label] of TOOLS) {
-    const a = document.createElement("a"); a.href = href; a.textContent = label;
-    if (href === current) a.setAttribute("aria-current", "page");
-    nav.appendChild(a);
-  }
-  $("sp-export").addEventListener("click", downloadRelease);
-  $("sp-import").addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) await importFile(f); e.target.value = ""; });
-  updateRelBar();
-}
 
 /* ---------- UI helpers ---------- */
 function bindSeg(el, getVal, onPick) {
@@ -357,14 +394,13 @@ const DEMO_TRACKS = [
 ].join("\n");
 
 window.SP = {
-  KEY, SCHEMA, TOOLS, FONTS, PRESETS, DEMO_TRACKS, $,
+  KEY, SCHEMA, FONTS, PRESETS, DEMO_TRACKS, $, vault, library, cover, logo, bindDrop, replace, readJSON,
+  status: () => status, onStatus: (fn) => { statusListeners.add(fn); return () => statusListeners.delete(fn); },
   hexToRgb, rgbToHex, rgba, lum, relLum, contrast, rgbToHsl, hslToRgb, rgbToLab, labDist,
   safeName, mulberry32, hashStr, clone, toast, download, copy, canvasBlob, debounce, rafOnce, bindSeg,
   get, set, patch, on, reset,
-  image, setImageFile, setImageSource, clearImage, imageMeta, onImage, bindImageDrop,
   exportObject, downloadRelease, importFile, importObject,
   parseTracks, tracksToText, secs, fmtTime, runtime, titleLine,
-  mountNav,
 };
 load();
 })();

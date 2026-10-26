@@ -72,9 +72,9 @@ async function render(canvas, db, image) {
 
   // Head: artist, year, title line, runtime
   ctx.textBaseline = "alphabetic";
-  const artistSize = u * 0.0295;
-  ctx.font = `${bwt("700")} ${artistSize}px ${bface}`; ctx.fillStyle = rgba(ink, 1);
-  SR.drawTracked(ctx, sl.artist.toUpperCase(), X, u * 0.158, 0.32, artistSize);
+  const artistSize = u * 0.0295, afn = sl.artistFont || bodyName;
+  ctx.font = `${SR.weightFor(afn, sl.artistWeight || 700)} ${artistSize}px ${SR.faceStack(afn)}`; ctx.fillStyle = rgba(sl.artistColor === "accent" ? spot : ink, 1);
+  SR.drawTracked(ctx, SR.applyCase(sl.artist, sl.artistCase || "upper"), X, u * 0.158, 0.32, artistSize);
   if (sl.year.trim()) {
     const ys = u * 0.016; ctx.font = `${bwt("600")} ${ys}px ${bface}`; ctx.fillStyle = rgba(ink, 0.6);
     const w = SR.measureTracked(ctx, sl.year.toUpperCase(), 0.26, ys);
@@ -103,7 +103,7 @@ async function render(canvas, db, image) {
   // Foot: barcode, footer, credits (credits sit above the footer)
   const footerY = H - u * 0.078;
   let cornerTop = H - u * 0.065, barcodeLeft = R;
-  if (sl.barcode) { barcodeLeft = R - SR.barcodeWidth(u); cornerTop = SR.drawBarcode(ctx, u, R, cornerTop, bface, bg, ink, sl); }
+  if (sl.barcode) { barcodeLeft = R - SR.barcodeWidth(u, sl); cornerTop = SR.drawBarcode(ctx, u, R, cornerTop, bface, bg, ink, sl, spot); }
   if (sl.footer.trim()) {
     let fs = u * 0.0172; const avail = (sl.barcode ? barcodeLeft - u * 0.03 : R) - X;
     ctx.fillStyle = rgba(ink, 0.58);

@@ -1,66 +1,41 @@
 # Sleeve Press
 
-Small, fast, predictable tools for making a release's cover art, tracklist and Suno prompts. Nothing is AI-generated: everything is rule-based, seeded and repeatable, so the same input always gives the same output.
+Cover art, print pieces and promo images for a release, all from one set of words and one look. It's not generative AI: everything is drawn in your browser from seeded rules, so the same settings always give the same picture. Open `index.html` (any static host, or straight from disk) and go.
 
-Plain HTML, CSS and JavaScript. No build step, no dependencies. Open `index.html`, or host the folder anywhere static (GitHub Pages works as is).
+## Sections
 
-| Page | What it does |
+| Section | What it's for |
 |---|---|
-| `index.html` | **Release Desk.** Basics for the current release, import/export, "next release, keep the look". |
-| `title-lab.html` | **Title Lab.** Release and track names from 14 theme word banks, 28 templates and filters (length, syllables, alliteration). Seeded; star names to teach the next batch, **Riff** on a starred name, or **Surprise** for two random themes. |
-| `palette-pull.html` | **Palette Pull.** Ground / ink / spot from the cover (seeded k-means), from one colour, from a 36-palette library, or rolled (dark / light / bold) with per-role locks. Every roll clears 7:1 ink and 3:1 spot contrast. Alternatives from the same swatches, plus a plain-language colour description. |
-| `sleeve-press.html` | **Sleeve Press.** The front sleeve. Seeded **Shuffle look** with group locks (colours, type, layout, motif, border, backdrop), a 12-variant gallery, undo, layout presets and saved looks. 20 faces (separate title and body face), free positioning, 8 border styles, 8 motif kinds, wash / big shape / texture layers, image blur, contrast and posterize, catalogue plate, EAN-13 barcode. |
-| `tracklist.html` | **Tracklist Typesetter.** Back sleeve in the same type system, border and backdrop: single column, A/B sides, or a 4:5 card. Text/Markdown/CSV export. |
-| `style-forge.html` | **Style Forge.** Suno style prompts from toggles across 38 genres. Locks, seeded shuffle, energy, trim to your character limit, exclude list, structure tags, a saved prompt bank, and per-track prompts using each track's BPM and key, with optional per-track variety. |
-| `release-kit.html` | **Release Kit.** Cover sizes, back sleeve, banner, social tile, YouTube 16:9, story 9:16, vinyl centre labels per side, series strip, text files and `release.json`, zipped by catalogue number. Preflight checklist. |
+| **Discover** | An endless grid of designs for your release, one per seed. ♥ the ones you like, open one in Design, or ask for "more like this". Filter by mood (dark, light, bold, mono, warm, cool) and type feel, and keep parts of your current design fixed. |
+| **Design** | The sleeve editor. Click anything on the cover (title, artist, footer, marks, label, picture, background) to edit just that thing. Drag to move it, double-click words to retype them in place, and Ctrl/⌘ + scroll to zoom the picture. Shuffle, Variations and ♥ Flag sit above the cover. |
+| **Print** | Exact-size PDFs: CD booklet (single or folded), tray inlay with spines, card wallet, CD disc label, vinyl centre labels, and a sticker sheet. Crop marks, bleed and fold lines, on A4 or US Letter, with a grid mode for pre-cut label sheets. Print at 100% / Actual size. |
+| **Export** | Release-day files: streaming covers, back cover, promo designs (release post, story, YouTube thumbnail, video still, header banner, countdown teaser), the tracklist, a YouTube description with chapter timestamps, Suno prompts and the palette. Download one at a time or as a zip. |
+| **Library** | Saved releases (with their pictures), flagged looks, your record label name and logo, a catalogue sheet of everything you've saved, and back up / restore. |
+| Titles, Suno style | Word tools: a seeded title brainstormer and a Suno style-prompt builder. They share the same release. |
 
-## How the tools connect
+## Saving
 
-Every page reads and writes one record, kept in `localStorage` and exportable at any time as `release.json` (button at the top right of every page). Change something in one tool and the others see it:
+- Your current release autosaves in this browser as you work. The dot in the top bar says whether the browser is keeping it.
+- **Save** (or Ctrl/⌘ + S) puts a copy in your Library. Open it again any time; "Next in series" starts the next catalogue number with the same look and label.
+- **Library → Back up everything** writes one JSON file with every saved release, picture, flagged look and your logo. Restore it on any machine.
+- `release.json` (Library or Export) carries a single release, picture included.
 
-```
-Title Lab ──► release.title, tracks
-Palette Pull ──► palette ──► Sleeve, Tracklist, Kit (colours everywhere)
-Sleeve ──► release fields, sleeve look (face, grain, frame…) ──► Tracklist, Kit
-Tracklist ──► tracks (title, feat, bpm, key, length, side) ──► Style Forge, Kit
-Style Forge ──► style prompt / exclude / structure / per-track batch ──► Kit
-Cover image ── shared by Palette Pull, Sleeve, Tracklist (ghost), Kit
-```
+If the browser won't store anything (some private windows, or opening the file from disk in Firefox), the dot turns amber. Everything still works for the session; back up before you close the tab.
 
-`release.json` is also the portable format: import it on another machine or browser and everything, cover image included, is back where you left it.
-
-> **Opening from disk:** browsers differ on whether `file://` pages share storage. If the tools don't seem to share state, serve the folder (`python3 -m http.server`) or move a release between pages with Export / Import.
-
-## `release.json` (`sleevepress.release/1`)
-
-```jsonc
-{
-  "schema": "sleevepress.release/1",
-  "release": { "artist": "", "title": "NINE\nNIGHT", "catalog": "", "year": "", "footer": "", "format": "EP" },
-  "palette": { "bg": "#15120f", "ink": "#ece6da", "accent": "#9b1b1e", "name": "", "swatches": [], "words": "" },
-  "tracks":  [ { "title": "", "feat": "", "bpm": "", "key": "", "length": "3:41", "side": "A" } ],
-  "sleeve":  { /* Sleeve Press settings: motif, type, image mode, barcode, … */ },
-  "typeset": { /* Tracklist settings: layout, numbering, columns, credits, … */ },
-  "style":   { "form": { /* Style Forge state */ }, "prompt": "", "exclude": "", "structure": "", "batch": [] },
-  "names":   { "shortlist": [], "seed": 1, "opts": {} },
-  "kit":     { "series": [], "sizes": null },
-  "looks":   [ { "name": "", "look": { /* sleeve settings + bg/ink/accent */ } } ],
-  "image":   { "dataUrl": "data:image/jpeg;base64,…", "name": "", "w": 0, "h": 0 }   // export only
-}
-```
-
-Unknown or missing keys fall back to defaults, so older files keep loading as the schema grows.
-
-## Layout
+## Files
 
 ```
-index.html, title-lab.html, palette-pull.html, sleeve-press.html,
-tracklist.html, style-forge.html, release-kit.html
-shared/press.css            house style
-shared/press.js             release store, cover image, import/export, nav, helpers, track parser
-shared/looks.js             palette library, font table, layout presets, palette roller, look randomizer
-shared/sleeve-render.js     front-sleeve renderer, border and backdrop layers (used by every page that draws)
-shared/tracklist-render.js  back-sleeve renderer and text exports (used by Tracklist, Kit)
+index.html                  the app (loads everything below)
+shared/press.js             SP: the release record, storage (localStorage + IndexedDB), pictures, library, track parser, utilities
+shared/looks.js             Looks: palettes, faces, layout presets, moods, the seeded randomizer and "more like this"
+shared/sleeve-render.js     SleeveRender: the front sleeve (returns hit boxes for the editor)
+shared/tracklist-render.js  TracklistRender: the back sleeve
+shared/makers.js            Makers: print pieces and promo designs
+shared/pdf.js               PDF writer and zip writer
+shared/app.js               App: shell, routing, undo, flagging, saving
+shared/view-*.js / .css     one file pair per section
 ```
 
-Fonts load from Google Fonts; offline, the renderers fall back to system sans-serif.
+## The release record
+
+One JSON object (`schema: "sleevepress.release/1"`) with sections `release` (artist, title, catalog, year, footer, format, label, date, cta, links), `palette` (bg, ink, accent, name), `tracks`, `sleeve` (every look and position setting), `typeset` (back sleeve), `style` and `names` (word tools), `print`, `promo`, and `looks` (flagged looks). Unknown or missing keys fall back to defaults, so older files still open.

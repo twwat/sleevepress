@@ -18,13 +18,20 @@ const SLEEVE_DEFAULTS = {
   // type
   font: "Archivo", bodyFont: "", titleSize: 100, tracking: -1, leading: 88.5, titleCase: "upper", titlePos: "centre", titleDy: 0, titleAccent: false,
   artistSize: 100, artistTrack: 32, footerSize: 100, footerTrack: 25,
+  // per-element type ("" follows the global value)
+  titleAlign: "", titleX: 0, titleStyle: "solid", titleColor: "ink",
+  artistFont: "", artistCase: "upper", artistColor: "ink", artistAlign: "", artistX: 0, artistRotate: "none", artistWeight: 700,
+  footerAlign: "", footerX: 0, footerColor: "ink", footerOpacity: 58, footerCase: "upper",
+  motifAlign: "", motifX: 0,
   // image
-  imgMode: "bleed", imgTone: "ink", dim: 60, zoom: 100, shiftX: 0, shiftY: 0, imgBlur: 0, imgContrast: 100, imgPosterize: 0,
+  imgMode: "bleed", imgTone: "ink", imgBoxX: 0, imgBoxY: 0, imgBoxSize: 100, dim: 60, zoom: 100, shiftX: 0, shiftY: 0, imgBlur: 0, imgContrast: 100, imgPosterize: 0,
+  // record label mark (name from release.label, logo is a separate shared image)
+  labelMark: "none", labelX: 86, labelY: 90.5, labelSize: 100, labelColor: "ink", labelOpacity: 85, logoMode: "tint",
   // catalogue
-  plate: false, platePos: "tr", plateText: "", barcode: false, barcodeDigits: "",
+  plate: false, platePos: "tr", plateText: "", barcode: false, barcodeDigits: "", barcodeStyle: "box", barcodeSize: 100,
   exportSize: "3000",
 };
-const RELEASE_KEYS = ["artist", "title", "footer", "catalog", "year"];
+const RELEASE_KEYS = ["artist", "title", "footer", "catalog", "year", "label"];
 const PALETTE_KEYS = ["bg", "ink", "accent"];
 
 function flatten(db) {
@@ -36,6 +43,8 @@ function flatten(db) {
 }
 /* The look: everything but words, image placement and export size. */
 const LOOK_KEYS = Object.keys(SLEEVE_DEFAULTS).filter(k => !["plateText", "barcodeDigits", "exportSize", "zoom", "shiftX", "shiftY"].includes(k));
+/* The palette is part of a look too. */
+const lookOf = (st) => { const o = {}; for (const k of LOOK_KEYS) o[k] = st[k]; o.bg = st.bg; o.ink = st.ink; o.accent = st.accent; if (st.paletteName) o.paletteName = st.paletteName; return o; };
 
 /* ---------- fonts ---------- */
 const fontReady = {};
@@ -44,7 +53,7 @@ function loadFont(face) {
   if (!fontReady[face]) fontReady[face] = Promise.all(fontInfo(face).w.map(w => document.fonts.load(`${w} 100px "${face}"`))).catch(() => {});
   return fontReady[face];
 }
-const loadFonts = (st) => Promise.all([loadFont(st.font), loadFont(st.bodyFont || st.font)]);
+const loadFonts = (st) => Promise.all([loadFont(st.font), loadFont(st.bodyFont || st.font), loadFont(st.artistFont || st.bodyFont || st.font)]);
 /* Nearest weight the face actually has, so the browser never fakes a bold. */
 function weightFor(face, want) {
   const ws = fontInfo(face).w; want = Number(want);
@@ -53,9 +62,9 @@ function weightFor(face, want) {
 const faceStack = (f) => `"${f}", "Helvetica Neue", Arial, sans-serif`;
 
 /* ---------- tracked text ---------- */
-function drawTracked(ctx, text, x, y, trackEm, size) {
+function drawTracked(ctx, text, x, y, trackEm, size, stroke) {
   const track = trackEm * size; let cx = x;
-  for (const ch of text) { ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + track; }
+  for (const ch of text) { if (stroke) ctx.strokeText(ch, cx, y); else ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + track; }
   return cx - x - track;
 }
 function measureTracked(ctx, text, trackEm, size) {
@@ -64,6 +73,7 @@ function measureTracked(ctx, text, trackEm, size) {
   return w + Math.max(0, n - 1) * trackEm * size;
 }
 function applyCase(t, mode) {
+  if (mode === "asis") return t;
   if (mode === "lower") return t.toLowerCase();
   if (mode === "title") return t.toLowerCase().replace(/(^|[\s\-("'])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
   return t.toUpperCase();
@@ -79,8 +89,9 @@ function toned(image, state) {
   const key = [imageIds.get(image), state.imgTone, state.bg, state.ink, state.accent, blur, con, post].join("|");
   if (tonedCache.key === key) return tonedCache.canvas;
   const cap = 2400;
-  const s = Math.min(1, cap / Math.max(image.naturalWidth, image.naturalHeight));
-  const w = Math.max(1, Math.round(image.naturalWidth * s)), h = Math.max(1, Math.round(image.naturalHeight * s));
+  const iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
+  const s = Math.min(1, cap / Math.max(iw, ih));
+  const w = Math.max(1, Math.round(iw * s)), h = Math.max(1, Math.round(ih * s));
   const c = document.createElement("canvas"); c.width = w; c.height = h;
   const g = c.getContext("2d", { willReadFrequently: true });
   const filters = [];
@@ -112,16 +123,42 @@ function toned(image, state) {
   tonedCache = { key, canvas: c };
   return c;
 }
-function drawCover(ctx, img, x, y, w, h, state) {
-  const zoom = state.zoom / 100;
+/* Fills (x,y,w,h) with the image: zoom 100 covers the box, below 100 it floats smaller on the ground.
+   shiftX/shiftY move it by a share of the box, so dragging feels the same at every zoom. */
+function drawCover(ctx, img, x, y, w, h, state, clipPath) {
+  const zoom = (state.zoom ?? 100) / 100;
   const scale = Math.max(w / img.width, h / img.height) * zoom;
   const dw = img.width * scale, dh = img.height * scale;
-  const slackX = dw - w, slackY = dh - h;
-  const dx = x - slackX / 2 - (state.shiftX / 100) * slackX;
-  const dy = y - slackY / 2 - (state.shiftY / 100) * slackY;
-  ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  const dx = x + (w - dw) / 2 + ((state.shiftX || 0) / 100) * w;
+  const dy = y + (h - dh) / 2 + ((state.shiftY || 0) / 100) * h;
+  ctx.save(); ctx.beginPath();
+  if (clipPath) clipPath(ctx); else ctx.rect(x, y, w, h);
+  ctx.clip();
   ctx.drawImage(img, dx, dy, dw, dh);
   ctx.restore();
+}
+/* Where the picture sits for each placement, in sleeve units. */
+const IMG_MODES = ["bleed", "panel", "band", "circle", "split", "inset", "top", "arch"];
+function imageBox(st, S) {
+  const k = (st.imgBoxSize ?? 100) / 100, ox = S * (st.imgBoxX || 0) / 100, oy = S * (st.imgBoxY || 0) / 100;
+  const box = (cx, cy, w, h, shape) => ({ x: cx - w * k / 2 + ox, y: cy - h * k / 2 + oy, w: w * k, h: h * k, shape });
+  switch (st.imgMode) {
+    case "panel": return box(S * 0.705, S * 0.295, S * 0.37, S * 0.37);
+    case "band": return box(S * 0.5, S * 0.525, S * 1.0, S * 0.47);
+    case "circle": return box(S * 0.5, S * 0.42, S * 0.56, S * 0.56, "circle");
+    case "split": return box(S * 0.25, S * 0.5, S * 0.5, S * 1.0);
+    case "inset": return box(S * 0.5, S * 0.42, S * 0.62, S * 0.62);
+    case "top": return box(S * 0.5, S * 0.3, S * 1.0, S * 0.6);
+    case "arch": return box(S * 0.5, S * 0.44, S * 0.52, S * 0.68, "arch");
+    default: return box(S * 0.5, S * 0.5, S, S);
+  }
+}
+function boxPath(b) {
+  return (ctx) => {
+    if (b.shape === "circle") ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+    else if (b.shape === "arch") { const r = b.w / 2; ctx.moveTo(b.x, b.y + b.h); ctx.lineTo(b.x, b.y + r); ctx.arc(b.x + r, b.y + r, r, Math.PI, 0); ctx.lineTo(b.x + b.w, b.y + b.h); ctx.closePath(); }
+    else ctx.rect(b.x, b.y, b.w, b.h);
+  };
 }
 
 /* ---------- EAN-13 ---------- */
@@ -155,12 +192,28 @@ function eanModules(d13) {
   for (let i = 7; i <= 12; i++) bits += EAN_R[Number(d13[i])];
   return bits + "101"; // 95 modules
 }
-const barcodeWidth = (S) => S * 0.00165 * 95 + S * 0.022 + S * 0.00165 * 9;
+const barcodeWidth = (S, st) => (S * 0.00165 * 95 + S * 0.022 + S * 0.00165 * 9) * ((st && st.barcodeSize) || 100) / 100;
+/* Barcode styles: box (dark bars on a light box), clear (ink bars straight on the ground),
+   spot (spot-colour bars on the ground), spotbox (bars on a spot-colour box). Scanners want dark on light. */
+function barcodeColours(style, bg, ink, spot) {
+  const darker = (a, b) => lum(a) <= lum(b) ? a : b, lighter = (a, b) => lum(a) > lum(b) ? a : b;
+  if (style === "clear") return [null, ink];
+  if (style === "spot") return [null, spot];
+  if (style === "spotbox") return [spot, SP.contrast(bg, spot) >= SP.contrast(ink, spot) ? bg : ink];
+  return [lighter(ink, bg), darker(ink, bg)];
+}
+/* True when a style would print light bars on a darker ground (looks fine, may not scan). */
+function barcodeReversed(st) {
+  const bg = hexToRgb(st.bg), ink = hexToRgb(st.ink), spot = hexToRgb(st.accent);
+  const [box, bar] = barcodeColours(st.barcodeStyle, bg, ink, spot);
+  return lum(bar) > lum(box || bg) + 0.05;
+}
 // Draws the barcode block with its right edge at `right` and bottom edge at `bottom`; returns its top.
-function drawBarcode(ctx, S, right, bottom, face, bg, ink, state) {
+function drawBarcode(ctx, S0, right, bottom, face, bg, ink, state, spot) {
+  const S = S0 * ((state.barcodeSize || 100) / 100);
   const d13 = eanDigits(state);
   const bits = eanModules(d13);
-  const [box, bar] = lum(ink) >= lum(bg) ? [ink, bg] : [bg, ink]; // bars always dark on light
+  const [box, bar] = barcodeColours(state.barcodeStyle, bg, ink, spot || ink);
   const module = S * 0.00165;
   const barW = module * 95;
   const barH = S * 0.058;
@@ -169,8 +222,7 @@ function drawBarcode(ctx, S, right, bottom, face, bg, ink, state) {
   const w = barW + padX * 2 + module * 9;
   const h = barH + digitSize * 1.15 + padY * 2;
   const x0 = right - w, y0 = bottom - h;
-  ctx.fillStyle = rgba(box, 1);
-  ctx.fillRect(x0, y0, w, h);
+  if (box) { ctx.fillStyle = rgba(box, 1); ctx.fillRect(x0, y0, w, h); }
   const bx = x0 + padX + module * 9, by = y0 + padY;
   ctx.fillStyle = rgba(bar, 1);
   for (let i = 0; i < bits.length; i++) {
@@ -305,6 +357,13 @@ function drawFrame(ctx, W, H, st, ink, spot) {
       }
       ctx.stroke(); break;
     }
+    case "rules": { ctx.lineWidth = lw * 2; ctx.beginPath(); ctx.moveTo(inset, inset); ctx.lineTo(W - inset, inset); ctx.moveTo(inset, H - inset); ctx.lineTo(W - inset, H - inset); ctx.stroke(); break; }
+    case "film": {
+      // sprocket holes down both edges, like a contact sheet
+      ctx.fillStyle = rgba(col, st.frameOpacity / 100); const hw = S * 0.016, hh = S * 0.011, pitch = S * 0.034;
+      for (let y = inset; y < H - inset - hh; y += pitch) { ctx.fillRect(inset - hw, y, hw, hh); ctx.fillRect(W - inset, y, hw, hh); }
+      ctx.beginPath(); ctx.moveTo(inset + lw, 0); ctx.lineTo(inset + lw, H); ctx.moveTo(W - inset - lw, 0); ctx.lineTo(W - inset - lw, H); ctx.stroke(); break;
+    }
     default: box(0);
   }
   ctx.restore();
@@ -331,6 +390,8 @@ function drawMotif(ctx, S, st, xStart, top, ink, spot, seedText) {
       case "diamonds": ctx.moveTo(x + w / 2, cy - w * 0.8); ctx.lineTo(x + w * 1.15, cy); ctx.lineTo(x + w / 2, cy + w * 0.8); ctx.lineTo(x - w * 0.15, cy); ctx.closePath(); break;
       case "ticks": ctx.rect(x + w * 0.3, top, w * 0.4, h); break;
       case "wave": { const hh = h * (0.3 + 0.7 * r); ctx.rect(x, top + (h - hh) / 2, w, hh); break; }
+      case "plus": ctx.rect(x + w * 0.1, cy - w * 0.14, w * 1.1, w * 0.28); ctx.rect(x + w * 0.51, cy - w * 0.55, w * 0.28, w * 1.1); break;
+      case "chevrons": ctx.moveTo(x, top); ctx.lineTo(x + w * 0.5, top); ctx.lineTo(x + w * 1.3, cy); ctx.lineTo(x + w * 0.5, top + h); ctx.lineTo(x, top + h); ctx.lineTo(x + w * 0.8, cy); ctx.closePath(); break;
       case "slants": ctx.moveTo(x + w * 0.6, top); ctx.lineTo(x + w * 1.6, top); ctx.lineTo(x + w, top + h); ctx.lineTo(x, top + h); ctx.closePath(); break;
       default: ctx.rect(x + (outline ? lw / 2 : 0), top + (outline ? lw / 2 : 0), w - (outline ? lw : 0), h - (outline ? lw : 0));
     }
@@ -340,33 +401,91 @@ function drawMotif(ctx, S, st, xStart, top, ink, spot, seedText) {
 }
 function motifWidth(S, st) { const k = st.motifSize / 100; return (st.count - 1) * S * 0.0232 * st.motifPitch / 100 + S * 0.0105 * k * (st.motifKind === "slants" ? 1.6 : 1.2); }
 
+/* ---------- record label mark ---------- */
+const logoCache = new Map();
+/* Recolours a logo: tint keeps its alpha and fills it with one colour; knockout turns a dark-on-white logo into colour on clear. */
+function tintedLogo(logo, mode, rgb) {
+  if (!logo) return null;
+  if (mode === "original") return logo;
+  if (!imageIds.has(logo)) imageIds.set(logo, ++imageSeq);
+  const key = [imageIds.get(logo), mode, rgb.join(",")].join("|");
+  if (logoCache.has(key)) return logoCache.get(key);
+  const iw = logo.naturalWidth || logo.width, ih = logo.naturalHeight || logo.height, s = Math.min(1, 800 / Math.max(iw, ih));
+  const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(iw * s)); c.height = Math.max(1, Math.round(ih * s));
+  const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(logo, 0, 0, c.width, c.height);
+  const id = g.getImageData(0, 0, c.width, c.height), d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = mode === "knockout" ? (1 - (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255) * d[i + 3] : d[i + 3];
+    d[i] = rgb[0]; d[i + 1] = rgb[1]; d[i + 2] = rgb[2]; d[i + 3] = Math.min(255, mode === "knockout" ? a * 1.25 : a);
+  }
+  g.putImageData(id, 0, 0);
+  if (logoCache.size > 12) logoCache.clear();
+  logoCache.set(key, c); return c;
+}
+/* Draws the mark centred on (cx, cy); returns its box. */
+function drawLabelMark(ctx, S, st, cx, cy, colour, faceName, logo) {
+  const kind = st.labelMark, name = (st.label || "").trim();
+  if (kind === "none" || (kind === "logo" ? !logo : !name)) return null;
+  const k = st.labelSize / 100, a = st.labelOpacity / 100;
+  ctx.save(); ctx.globalAlpha = a;
+  let box;
+  if (kind === "logo") {
+    const t = tintedLogo(logo, st.logoMode, colour), h = S * 0.07 * k, w = h * (t.width / t.height);
+    const sc = Math.min(1, S * 0.3 * k / w), dw = w * sc, dh = h * sc;
+    ctx.drawImage(t, cx - dw / 2, cy - dh / 2, dw, dh); box = { x: cx - dw / 2, y: cy - dh / 2, w: dw, h: dh };
+  } else {
+    const fs = S * (kind === "stamp" ? 0.0105 : 0.0145) * k, f = faceStack(faceName), txt = name.toUpperCase();
+    ctx.font = `${weightFor(faceName, "700")} ${fs}px ${f}`;
+    ctx.fillStyle = rgba(colour, 1); ctx.strokeStyle = rgba(colour, 1); ctx.lineWidth = Math.max(1, S * 0.0014 * k);
+    if (kind === "stamp") {
+      // name set round a ring, a dot in the middle: the classic label roundel
+      const r = S * 0.042 * k; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.12, 0, Math.PI * 2); ctx.fill();
+      const ring = r * 0.72, chars = [...(txt + "  ·  ")];
+      const total = chars.reduce((t, ch) => t + ctx.measureText(ch).width + fs * 0.12, 0), scale = Math.min(1, (Math.PI * 2 * ring) / total);
+      let ang = -Math.PI / 2 - (total * scale) / ring / 2;
+      for (const ch of chars) {
+        const w = (ctx.measureText(ch).width + fs * 0.12) * scale;
+        ctx.save(); ctx.translate(cx + Math.cos(ang + w / ring / 2) * ring, cy + Math.sin(ang + w / ring / 2) * ring); ctx.rotate(ang + w / ring / 2 + Math.PI / 2);
+        ctx.fillText(ch, -ctx.measureText(ch).width / 2, fs * 0.35); ctx.restore(); ang += w / ring;
+      }
+      box = { x: cx - r, y: cy - r, w: r * 2, h: r * 2 };
+    } else {
+      const w = measureTracked(ctx, txt, 0.24, fs), pad = kind === "box" ? fs * 0.8 : 0;
+      if (kind === "box") ctx.strokeRect(cx - w / 2 - pad, cy - fs * 0.5 - pad * 0.7, w + pad * 2, fs + pad * 1.4);
+      drawTracked(ctx, txt, cx - w / 2, cy + fs * 0.36, 0.24, fs);
+      box = { x: cx - w / 2 - pad, y: cy - fs * 0.5 - pad * 0.7, w: w + pad * 2, h: fs + pad * 1.4 };
+    }
+  }
+  ctx.restore();
+  return box;
+}
+
 /* ---------- the sleeve ---------- */
-async function render(canvas, state, image) {
+async function render(canvas, state, image, logo) {
   const st = state, S = canvas.width;
   const ctx = canvas.getContext("2d");
   await loadFonts(st);
+  const boxes = {};
 
   const bg = hexToRgb(st.bg) || [21, 18, 15];
   const ink = hexToRgb(st.ink) || [236, 230, 218];
   const spot = hexToRgb(st.accent) || [155, 27, 30];
-  const bodyFace = st.bodyFont || st.font;
+  const colourOf = (c) => c === "accent" ? spot : ink;
+  const bodyFace = st.bodyFont || st.font, artistFace = st.artistFont || bodyFace;
   const face = faceStack(st.font), bface = faceStack(bodyFace);
   const k = fontInfo(st.font).k || 1;
 
   ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, 0, S, S);
 
   const timg = toned(image, st);
-  const mode = st.imgMode;
   if (timg) {
-    if (mode === "bleed") drawCover(ctx, timg, 0, 0, S, S, st);
-    else if (mode === "panel") drawCover(ctx, timg, S * 0.52, S * 0.11, S * 0.37, S * 0.37, st);
-    else if (mode === "band") drawCover(ctx, timg, 0, S * 0.29, S, S * 0.47, st);
-    if (mode === "bleed") {
-      ctx.fillStyle = rgba(bg, st.dim / 100); ctx.fillRect(0, 0, S, S);
-    } else {
-      ctx.fillStyle = rgba(bg, (st.dim / 100) * 0.5);
-      if (mode === "panel") ctx.fillRect(S * 0.52, S * 0.11, S * 0.37, S * 0.37); else ctx.fillRect(0, S * 0.29, S, S * 0.47);
-    }
+    const b = imageBox(st, S), path = boxPath(b);
+    drawCover(ctx, timg, b.x, b.y, b.w, b.h, st, path);
+    ctx.save(); ctx.beginPath(); path(ctx); ctx.clip();
+    ctx.fillStyle = rgba(bg, (st.dim / 100) * (st.imgMode === "bleed" ? 1 : 0.5)); ctx.fillRect(0, 0, S, S);
+    ctx.restore();
+    boxes.image = { x: b.x, y: b.y, w: b.w, h: b.h };
   }
 
   drawBackdrop(ctx, S, S, st, bg, ink, spot);
@@ -374,28 +493,43 @@ async function render(canvas, state, image) {
   drawFrame(ctx, S, S, st, ink, spot);
 
   const X = S * st.margin / 100;
-  const ax = (w) => st.align === "centre" ? (S - w) / 2 : st.align === "right" ? S - X - w : X;
-  const inkMain = rgba(ink, 1);
+  const alignOf = (el) => st[el + "Align"] || st.align;
+  const ax = (w, el) => { const al = alignOf(el), dx = S * (st[el + "X"] || 0) / 100; return (al === "centre" ? (S - w) / 2 : al === "right" ? S - X - w : X) + dx; };
   ctx.textBaseline = "alphabetic";
 
   // Artist (+ year)
   const artistY = S * st.artistY / 100;
   const artistSize = S * 0.0295 * st.artistSize / 100, aTrack = st.artistTrack / 100;
-  const artistText = st.artist.toUpperCase();
-  ctx.font = `${weightFor(bodyFace, "700")} ${artistSize}px ${bface}`; ctx.fillStyle = inkMain;
+  const artistText = applyCase(st.artist, st.artistCase || "upper");
+  ctx.font = `${weightFor(artistFace, st.artistWeight || 700)} ${artistSize}px ${faceStack(artistFace)}`; ctx.fillStyle = rgba(colourOf(st.artistColor), 1);
   const aw = measureTracked(ctx, artistText, aTrack, artistSize);
-  if (artistText) drawTracked(ctx, artistText, ax(aw), artistY, aTrack, artistSize);
+  const rotated = st.artistRotate === "left" || st.artistRotate === "right";
+  if (artistText && rotated) {
+    // Runs up the left edge or down the right edge; artistY is where its middle sits.
+    const left = st.artistRotate === "left", ex = left ? X * 0.62 + artistSize * 0.72 : S - X * 0.62 - artistSize * 0.72;
+    const ey = Math.min(S - aw / 2 - X * 0.5, Math.max(aw / 2 + X * 0.5, artistY)) + S * (st.artistX || 0) / 100;
+    ctx.save(); ctx.translate(ex, ey); ctx.rotate(left ? -Math.PI / 2 : Math.PI / 2);
+    drawTracked(ctx, artistText, -aw / 2, 0, aTrack, artistSize); ctx.restore();
+    boxes.artist = { x: left ? ex - artistSize * 0.8 : ex - artistSize * 0.2, y: ey - aw / 2, w: artistSize, h: aw };
+  } else if (artistText) {
+    const x = ax(aw, "artist");
+    drawTracked(ctx, artistText, x, artistY, aTrack, artistSize);
+    boxes.artist = { x, y: artistY - artistSize * 0.8, w: aw, h: artistSize };
+  }
   if (st.year.trim()) {
     const ys = S * 0.016, yt = st.year.toUpperCase();
     ctx.font = `${weightFor(bodyFace, "600")} ${ys}px ${bface}`; ctx.fillStyle = rgba(ink, 0.6);
-    const w = measureTracked(ctx, yt, 0.26, ys);
-    if (st.align === "left") drawTracked(ctx, yt, S - X - w, artistY, 0.26, ys);
-    else drawTracked(ctx, yt, st.align === "right" ? X : S - X - w, artistY, 0.26, ys);
+    const w = measureTracked(ctx, yt, 0.26, ys), al = rotated ? "centre" : alignOf("artist");
+    drawTracked(ctx, yt, al === "right" ? X : S - X - w, rotated ? S * 0.07 : artistY, 0.26, ys);
   }
 
   // Motif
   const motifTop = S * st.motifY / 100, motifH = S * 0.05 * st.motifSize / 100;
-  if (st.motifKind !== "none" && st.count > 0) drawMotif(ctx, S, st, ax(motifWidth(S, st)), motifTop, ink, spot, `${st.catalog}|${st.title}`);
+  if (st.motifKind !== "none" && st.count > 0) {
+    const mw = motifWidth(S, st), mx = ax(mw, "motif");
+    drawMotif(ctx, S, st, mx, motifTop, ink, spot, `${st.catalog}|${st.title}`);
+    boxes.motif = { x: mx, y: motifTop, w: mw, h: motifH };
+  }
 
   // Title: bottom baseline from the preset plus a nudge; shrinks to fit width and the room above it.
   const lines = st.title.split("\n").map(l => l.trim()).filter(Boolean).map(l => applyCase(l, st.titleCase));
@@ -405,7 +539,7 @@ async function render(canvas, state, image) {
     const trackEm = st.tracking / 100, lead = st.leading / 100;
     const bottom = ({ centre: 0.68, lower: 0.815, upper: 0.56 }[st.titlePos] + st.titleDy / 100) * S;
     let topLimit = S * 0.08;
-    if (artistText && artistY < bottom) topLimit = Math.max(topLimit, artistY + S * 0.102);
+    if (artistText && !rotated && artistY < bottom) topLimit = Math.max(topLimit, artistY + S * 0.102);
     if (st.motifKind !== "none" && motifTop < bottom) topLimit = Math.max(topLimit, motifTop + motifH + S * 0.054);
     ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
     const widest = Math.max(...lines.map(l => measureTracked(ctx, l, trackEm, size) / size));
@@ -413,20 +547,49 @@ async function render(canvas, state, image) {
     const blockH = size * lead * (lines.length - 1) + size * 0.72;
     if (bottom - blockH < topLimit) size *= Math.max(0.45, (bottom - topLimit) / blockH);
     ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
-    const optical = size * 0.035;
-    lines.forEach((l, i) => {
-      const y = bottom - (lines.length - 1 - i) * size * lead;
-      const last = i === lines.length - 1, w = measureTracked(ctx, l, trackEm, size);
-      ctx.fillStyle = st.titleAccent && last ? rgba(spot, 1) : inkMain;
-      const x = st.align === "left" ? X - optical : st.align === "right" ? S - X - w + optical : (S - w) / 2;
-      drawTracked(ctx, l, x, y, trackEm, size);
+    const optical = size * 0.035, al = alignOf("title"), dx = S * (st.titleX || 0) / 100;
+    const style = st.titleStyle || "solid", main = colourOf(st.titleColor);
+    let bx0 = Infinity, bx1 = -Infinity;
+    const placed = lines.map((l, i) => {
+      const y = bottom - (lines.length - 1 - i) * size * lead, w = measureTracked(ctx, l, trackEm, size);
+      const x = (al === "left" ? X - optical : al === "right" ? S - X - w + optical : (S - w) / 2) + dx;
+      bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x + w);
+      return { l, x, y, w, col: st.titleAccent && i === lines.length - 1 ? spot : main };
     });
+    const lw = Math.max(1, size * 0.028);
+    if (style === "block") {
+      // Each line on a bar of spot colour; the text takes whichever of ground/ink reads best on it.
+      const onSpot = SP.contrast(bg, spot) >= SP.contrast(ink, spot) ? bg : ink;
+      placed.forEach(p => {
+        const pad = size * 0.09;
+        ctx.fillStyle = rgba(st.titleColor === "accent" ? ink : spot, 1);
+        ctx.fillRect(p.x - pad, p.y - size * 0.74 - pad * 0.6, p.w + pad * 2, size * 0.74 + pad * 1.5);
+        ctx.fillStyle = rgba(st.titleColor === "accent" ? (SP.contrast(bg, ink) >= SP.contrast(spot, ink) ? bg : spot) : onSpot, 1);
+        drawTracked(ctx, p.l, p.x, p.y, trackEm, size);
+      });
+    } else {
+      if (style === "echo") {
+        ctx.lineWidth = lw * 0.8;
+        for (let e = 3; e >= 1; e--) placed.forEach(p => { ctx.strokeStyle = rgba(e === 1 ? spot : p.col, 0.16 + 0.18 * (3 - e)); drawTracked(ctx, p.l, p.x, p.y - e * size * 0.16, trackEm, size, true); });
+      }
+      if (style === "shadow") placed.forEach(p => { ctx.fillStyle = rgba(st.titleColor === "accent" ? ink : spot, 1); drawTracked(ctx, p.l, p.x + size * 0.045, p.y + size * 0.045, trackEm, size); });
+      placed.forEach(p => {
+        if (style === "outline") { ctx.strokeStyle = rgba(p.col, 1); ctx.lineWidth = lw; ctx.lineJoin = "round"; drawTracked(ctx, p.l, p.x, p.y, trackEm, size, true); }
+        else { ctx.fillStyle = rgba(p.col, 1); drawTracked(ctx, p.l, p.x, p.y, trackEm, size); }
+      });
+    }
+    const th = size * lead * (lines.length - 1) + size * 0.74;
+    boxes.title = { x: bx0, y: bottom - th, w: bx1 - bx0, h: th + size * 0.06 };
   }
 
   // Barcode and catalogue plate (bottom-right stack), plate top-right
   const right = S - X;
   let cornerTop = S * 0.935, barcodeLeft = right;
-  if (st.barcode) { barcodeLeft = right - barcodeWidth(S); cornerTop = drawBarcode(ctx, S, right, cornerTop, bface, bg, ink, st); }
+  if (st.barcode) {
+    barcodeLeft = right - barcodeWidth(S, st); const bb = cornerTop;
+    cornerTop = drawBarcode(ctx, S, right, cornerTop, bface, bg, ink, st, spot);
+    boxes.barcode = { x: barcodeLeft, y: cornerTop, w: right - barcodeLeft, h: bb - cornerTop };
+  }
   if (st.plate) {
     if (st.platePos === "br") drawPlate(ctx, S, right, cornerTop - (st.barcode ? S * 0.014 : 0), "bottom", bface, ink, st);
     else drawPlate(ctx, S, right, Math.max(S * 0.06, motifTop), "top", bface, ink, st);
@@ -438,18 +601,25 @@ async function render(canvas, state, image) {
     const fy = S * st.footerY / 100;
     const corner = fy > S * 0.8 && (st.barcode || (st.plate && st.platePos === "br"));
     const avail = (corner ? Math.min(barcodeLeft, st.plate && st.platePos === "br" ? right - S * 0.12 : right) - S * 0.03 : right) - X;
-    ctx.fillStyle = rgba(ink, 0.58);
-    let text = st.footer.toUpperCase().replace(/\s*·\s*/g, "  ·  ");
+    ctx.fillStyle = rgba(colourOf(st.footerColor), (st.footerOpacity ?? 58) / 100);
+    const fc = (t) => applyCase(t, st.footerCase || "upper");
+    let text = fc(st.footer).replace(/\s*·\s*/g, "  ·  ");
     let track = st.footerTrack / 100;
     ctx.font = `${weightFor(bodyFace, "600")} ${fs}px ${bface}`;
-    if (measureTracked(ctx, text, track, fs) > avail) { text = st.footer.toUpperCase(); track = Math.min(track, 0.16); }
+    if (measureTracked(ctx, text, track, fs) > avail) { text = fc(st.footer); track = Math.min(track, 0.16); }
     const w = measureTracked(ctx, text, track, fs);
     if (w > avail) { fs *= avail / w; ctx.font = `${weightFor(bodyFace, "600")} ${fs}px ${bface}`; }
     const fw = measureTracked(ctx, text, track, fs);
-    drawTracked(ctx, text, corner ? X : ax(fw), fy, track, fs);
+    const fx = corner && alignOf("footer") !== "left" ? X + S * (st.footerX || 0) / 100 : ax(fw, "footer");
+    drawTracked(ctx, text, fx, fy, track, fs);
+    boxes.footer = { x: fx, y: fy - fs * 0.9, w: fw, h: fs * 1.2 };
   }
 
+  const lb = drawLabelMark(ctx, S, st, S * st.labelX / 100, S * st.labelY / 100, colourOf(st.labelColor), bodyFace, logo);
+  if (lb) boxes.label = lb;
+
   applyGrain(ctx, S, S, st.grain, S);
+  return boxes;
 }
 
 function filename(state, size, tag) {
@@ -458,8 +628,8 @@ function filename(state, size, tag) {
 }
 
 window.SleeveRender = {
-  SLEEVE_DEFAULTS, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, flatten, render, filename, toned, drawCover,
-  loadFont, loadFonts, weightFor, faceStack, fontInfo, drawTracked, measureTracked, applyCase, drawBarcode, barcodeWidth, eanDigits,
-  applyGrain, applyVignette, drawBackdrop, drawFrame,
+  SLEEVE_DEFAULTS, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
+  loadFont, loadFonts, weightFor, faceStack, fontInfo, drawTracked, measureTracked, applyCase, drawBarcode, barcodeWidth, barcodeReversed, eanDigits,
+  applyGrain, applyVignette, drawBackdrop, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth,
 };
 })();

@@ -1,0 +1,54 @@
+/* Sleeve Press: Print view */
+.view-print .pr-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 24px; align-items: start; }
+@media (max-width: 960px) { .view-print .pr-wrap { grid-template-columns: minmax(0, 1fr); } }
+.view-print .pr-main { display: grid; gap: 16px; min-width: 0; }
+.view-print .pr-side { display: grid; gap: 14px; min-width: 0; position: sticky; top: 64px; }
+@media (max-width: 960px) { .view-print .pr-side { position: static; } }
+
+.view-print .pr-pieces { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.view-print .pr-card {
+  display: grid; grid-template-rows: auto 1fr; background: var(--bench); border: 1px solid var(--rule); min-width: 0;
+  transition: border-color .15s;
+}
+.view-print .pr-card.on { border-color: var(--chalk-dim); }
+.view-print .pr-pick {
+  position: relative; display: grid; place-items: center; height: 150px; padding: 14px; border: 0; border-bottom: 1px solid var(--rule);
+  background: radial-gradient(circle at 50% 40%, #2a261f, var(--room) 75%); width: 100%;
+}
+.view-print .pr-thumb { display: block; max-width: 100%; max-height: 100%; height: 100%; aspect-ratio: 1; box-shadow: 0 10px 24px -8px rgba(0,0,0,.8); }
+.view-print .pr-thumb.round { border-radius: 50%; overflow: hidden; }
+.view-print .pr-thumb canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+.view-print .pr-card:not(.on) .pr-thumb { opacity: .55; filter: saturate(.6); }
+.view-print .pr-pick:hover .pr-thumb { opacity: 1; filter: none; }
+.view-print .pr-tick {
+  position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; border-radius: 2px;
+  border: 1px solid var(--rule-strong); background: var(--room);
+}
+.view-print .pr-card.on .pr-tick { background: var(--lamp); border-color: var(--lamp); }
+.view-print .pr-card.on .pr-tick::after {
+  content: ""; position: absolute; left: 7px; top: 3px; width: 6px; height: 11px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.view-print .pr-info { padding: 10px 12px 12px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.view-print .pr-info b { font-size: 14px; }
+.view-print .pr-size { font: 11px var(--f-mono); color: var(--chalk-dim); }
+.view-print .pr-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px; margin-top: 6px; }
+.view-print .pr-fields input { padding: 6px 8px; min-height: 32px; }
+.view-print .pr-card:not(.on) .pr-fields { opacity: .6; }
+
+.view-print .pr-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.view-print .pr-checks .check { min-height: 32px; }
+.view-print .pr-roundopts { display: grid; gap: 10px; border-top: 1px solid var(--rule); padding-top: 12px; }
+.view-print .pr-roundopts.dim > label { opacity: .6; }
+.view-print .pr-grid { display: grid; gap: 10px; }
+.view-print .pr-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.view-print .pr-nums input { padding: 6px 8px; min-height: 32px; }
+.view-print .seg button { min-height: 34px; }
+
+.view-print .pr-pagewrap { background: #0d0c0a; border: 1px solid var(--rule); padding: 14px; display: grid; place-items: center; }
+.view-print .pr-page { display: block; width: 100%; max-width: 340px; height: auto; box-shadow: 0 12px 30px -10px rgba(0,0,0,.9); background: #fff; }
+.view-print .pr-pager { display: flex; justify-content: space-between; gap: 8px; }
+.view-print .pr-pager .btn { min-height: 32px; }
+.view-print .pr-dl { justify-content: center; min-height: 42px; font-size: 14px; }
+.view-print .pr-warn { font-size: 12px; color: var(--warn); border: 1px solid var(--warn); padding: 8px 10px; }
+.view-print .pr-note b { color: var(--chalk-dim); }
+.view-print .pr-tracks textarea { min-height: 140px; }
