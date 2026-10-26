@@ -242,7 +242,7 @@ function preflight() {
   add(!!(r.catalog || "").trim(), (r.catalog || "").trim() ? `Cat. ${r.catalog}` : "No catalogue no.", "Files are named after the catalogue number.");
   const ink = SP.hexToRgb(p.ink), bg = SP.hexToRgb(p.bg), cr = ink && bg ? SP.contrast(ink, bg) : 0;
   add(cr >= 4.5, `Contrast ${cr.toFixed(1)}:1`, cr >= 4.5 ? "Ink on ground reads well." : "Ink on ground is low: small text may be hard to read.");
-  add(!!SP.cover.meta() || hasPic, hasPic ? "Picture" : "No picture", hasPic ? "" : "Sleeves will be type only.");
+  add(hasPic, hasPic ? "Picture" : "No picture", hasPic ? "" : "Sleeves will be type only.");
   add(d.tracks.length > 0, d.tracks.length ? `${d.tracks.length} tracks` : "No tracks", d.tracks.length ? "" : "Back cover, story and video still need a tracklist.");
   if (d.tracks.length && !timed()) add(false, "Lengths missing", "Add a length to every track for YouTube timestamps.");
   checksEl.replaceChildren(...out.map(([ok, t, tip]) => h("li", { class: ok ? "ok" : "warn", title: tip || "" }, h("b", { "aria-hidden": "true" }, ok ? "✓" : "!"), t)));
