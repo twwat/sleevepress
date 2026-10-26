@@ -179,6 +179,10 @@ function set(section, value) { get(); db[section] = value; persistSoon(); emit(f
 function patch(section, p) { get(); db[section] = { ...db[section], ...p }; persistSoon(); emit(false); }
 function replace(record) { db = mergeDefaults(record); persistSoon(); emit(false); }
 function on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+/* Fired when a different release is swapped in (open, import, start blank): undo history must not cross it. */
+const switchFns = new Set();
+const onSwitch = (fn) => { switchFns.add(fn); return () => switchFns.delete(fn); };
+const switched = () => switchFns.forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
 window.addEventListener("storage", (e) => { if (e.key === KEY) { load(); emit(true); } });
 window.addEventListener("beforeunload", () => { if (db) persist(); });
 
@@ -190,7 +194,7 @@ function asset(name, cap, mime) {
   const init = () => ready || (ready = (async () => {
     let v = await vault.get(name);
     if (!v && name === "image") {   // carry over a cover stored by the older multi-page version
-      try { const old = localStorage.getItem(IMG_KEY); if (old) { v = { url: old, meta: JSON.parse(localStorage.getItem(IMG_KEY + ".meta") || "null") }; vault.set(name, v); localStorage.removeItem(IMG_KEY); } } catch (e) {}
+      try { const old = localStorage.getItem(IMG_KEY); if (old) { v = { url: old, meta: JSON.parse(localStorage.getItem(IMG_KEY + ".meta") || "null") }; if (await vault.set(name, v)) { localStorage.removeItem(IMG_KEY); localStorage.removeItem(IMG_KEY + ".meta"); } } } catch (e) {}
     }
     if (v && v.url) { url = v.url; meta = v.meta || null; }
   })());
@@ -203,13 +207,14 @@ function asset(name, cap, mime) {
     async data() { await init(); return url; },
     meta: () => meta,
     async setSource(src, fname) {
+      await init();
       const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
       const s = Math.min(1, cap / Math.max(im.naturalWidth, im.naturalHeight));
       const c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * s); c.height = Math.round(im.naturalHeight * s);
       c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
       url = mime === "image/png" ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.88);
       meta = { name: fname || name, w: im.naturalWidth, h: im.naturalHeight };
-      await init(); await vault.set(name, { url, meta }); changed();
+      await vault.set(name, { url, meta }); changed();
     },
     setFile(file) {
       if (!file || !file.type.startsWith("image/")) { toast("That isn't an image file."); return Promise.resolve(); }
@@ -253,7 +258,8 @@ async function downloadRelease() {
 async function importObject(o) {
   if (!o || typeof o !== "object" || typeof o.schema !== "string" || !o.schema.startsWith("sleevepress.release/"))
     throw new Error("not a release file");
-  db = mergeDefaults(o); persist();
+  const looks = get().looks; switched();
+  db = mergeDefaults(o); db.looks = [...looks, ...db.looks.filter(l => l && l.id && !looks.some(k => k.id === l.id))]; persist();
   if (o.image && o.image.dataUrl) await cover.setSource(o.image.dataUrl, o.image.name); else await cover.clear();
   if (o.logo && o.logo.dataUrl) await logo.setSource(o.logo.dataUrl, o.logo.name);
   emit(false);
@@ -268,7 +274,7 @@ async function importFile(file) {
     await importObject(o); toast("Release loaded"); return "release";
   } catch (e) { toast("That isn't a Sleeve Press file."); return null; }
 }
-async function reset() { const keep = get(); db = DEFAULT(); db.looks = keep.looks; db.release.label = keep.release.label; persist(); await cover.clear(); emit(false); }
+async function reset() { switched(); const keep = get(); db = DEFAULT(); db.looks = keep.looks; db.release.label = keep.release.label; persist(); await cover.clear(); emit(false); }
 
 /* ---------- the library: saved releases (with their pictures) ---------- */
 const LIB_SCHEMA = "sleevepress.library/1";
@@ -292,6 +298,7 @@ const library = {
   },
   async open(id) {
     const e = await vault.get("lib." + id); if (!e) return false;
+    switched();
     const looks = get().looks; db = mergeDefaults(e.record); db.looks = looks; db.libId = id; persist();
     if (e.image) await cover.setSource(e.image, e.imageMeta && e.imageMeta.name); else await cover.clear();
     emit(false); return true;
@@ -401,7 +408,7 @@ const DEMO_TRACKS = [
 ].join("\n");
 
 window.SP = {
-  KEY, SCHEMA, FONTS, PRESETS, DEMO_TRACKS, $, vault, library, cover, logo, bindDrop, replace, readJSON,
+  KEY, SCHEMA, FONTS, PRESETS, DEMO_TRACKS, $, vault, library, cover, logo, bindDrop, replace, readJSON, onSwitch,
   status: () => status, onStatus: (fn) => { statusListeners.add(fn); return () => statusListeners.delete(fn); },
   hexToRgb, rgbToHex, rgba, lum, relLum, contrast, rgbToHsl, hslToRgb, rgbToLab, labDist,
   safeName, mulberry32, hashStr, clone, toast, download, copy, canvasBlob, debounce, rafOnce, bindSeg,

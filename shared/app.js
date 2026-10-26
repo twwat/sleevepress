@@ -17,8 +17,12 @@ function checkpoint(force) {
   if (force || now - lastPush > 700) { past.push(SP.clone(SP.get())); if (past.length > 80) past.shift(); future.length = 0; }
   lastPush = now; updateUndo();
 }
-function undo() { if (!past.length) return; future.push(SP.clone(SP.get())); SP.replace(past.pop()); lastPush = 0; updateUndo(); }
-function redo() { if (!future.length) return; past.push(SP.clone(SP.get())); SP.replace(future.pop()); lastPush = 0; updateUndo(); }
+/* Flags and the library link aren't edits: they stay as they are now whichever way you step. */
+function restore(rec) { const cur = SP.get(), r = { ...rec, looks: cur.looks }; if (cur.libId) r.libId = cur.libId; else delete r.libId; SP.replace(r); }
+function undo() { if (!past.length) return; future.push(SP.clone(SP.get())); restore(past.pop()); lastPush = 0; updateUndo(); }
+function redo() { if (!future.length) return; past.push(SP.clone(SP.get())); restore(future.pop()); lastPush = 0; updateUndo(); }
+function clearHistory() { past.length = 0; future.length = 0; lastPush = 0; updateUndo(); }
+SP.onSwitch(clearHistory);
 const undoFns = new Set();
 function updateUndo() { undoFns.forEach(fn => fn(past.length, future.length)); }
 
@@ -51,7 +55,7 @@ function flag(look, name) {
   SP.set("looks", [{ id, name: name || look.paletteName || "Look", look: { ...look }, ts: Date.now() }, ...flagged()]);
   return id;
 }
-function unflag(idOrLook) { const id = typeof idOrLook === "string" ? idOrLook : lookId(idOrLook); SP.set("looks", flagged().filter(l => l.id !== id)); }
+function unflag(idOrLook) { if (!idOrLook) return; const id = typeof idOrLook === "string" ? idOrLook : lookId(idOrLook); SP.set("looks", flagged().filter(l => l.id !== id)); }
 function toggleFlag(look) { if (isFlagged(look)) { unflag(look); return false; } flag(look); return true; }
 
 /* ---------- pictures ---------- */
@@ -81,7 +85,7 @@ async function saveToLibrary(asNew) {
 }
 /* Starts the next release in a series: same look and label, next catalogue number, words cleared. */
 function nextRelease() {
-  checkpoint(true);
+  clearHistory();
   const d = SP.clone(SP.get()), r = d.release;
   const m = /^(.*?)(\d+)(\D*)$/.exec(r.catalog || "");
   const nextCat = m ? m[1] + String(+m[2] + 1).padStart(m[2].length, "0") + m[3] : r.catalog;
@@ -154,7 +158,8 @@ function mountBar() {
   undoFns.add((a, b) => { $("undoBtn").disabled = !a; $("redoBtn").disabled = !b; });
   document.addEventListener("keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey; if (!mod) return;
-    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
+    const a = document.activeElement;
+    const typing = !!a && (a.tagName === "TEXTAREA" || a.isContentEditable || (a.tagName === "INPUT" && /^(text|search|number|email|url|tel|password)$/i.test(a.type)));
     if (e.key.toLowerCase() === "s") { e.preventDefault(); saveToLibrary(); }
     else if (e.key.toLowerCase() === "z" && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (e.key.toLowerCase() === "y" && !typing) { e.preventDefault(); redo(); }
@@ -185,7 +190,13 @@ function queue() {
   return (job) => (chain = chain.then(job).catch(e => console.error(e)));
 }
 
+/* Looks flagged by the older multi-page version were stored as { name, look } with no id. */
+function migrateLooks() {
+  const ls = SP.get().looks; if (ls.every(l => l && l.id && l.look)) return;
+  SP.set("looks", ls.filter(l => l && l.look).map(l => l.id ? l : { ...l, id: lookId(l.look), ts: l.ts || Date.now() }));
+}
 function start() {
+  migrateLooks(); SP.on(() => { if (SP.get().looks.some(l => !l || !l.id)) migrateLooks(); });
   mountBar(); window.addEventListener("hashchange", route); route();
 }
 

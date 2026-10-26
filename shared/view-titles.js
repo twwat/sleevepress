@@ -132,7 +132,7 @@ function titleLines(text) {
 /* ---------- view ---------- */
 let el = null, visible = false, dirty = true;
 const q = (id) => el.querySelector("#tl-" + id);
-const blank = (title) => ({ title, feat: "", bpm: "", key: "", length: "", side: "A" });
+const blank = (title) => ({ title, feat: "", bpm: "", key: "", length: "", side: (SP.get().tracks.at(-1) || {}).side || "A" });
 
 function useAsTitle(text) {
   App.checkpoint(true);

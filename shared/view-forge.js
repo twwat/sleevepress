@@ -445,7 +445,14 @@ function mount(root) {
     SP.toast("Loaded the demo tracks. Undo puts yours back.");
   });
 
-  SP.on(() => { if (writing) return; dirty = true; if (visible) refresh(); });
+  SP.on(() => {
+    if (writing) return; dirty = true;
+    if (visible) { refresh(); return; }
+    // Hidden: still keep the per-track prompts in step with the tracklist, so Export never ships stale ones.
+    const d = SP.get(); if (!d.style.prompt) return;
+    F = loadForm(d); const batch = batchList();
+    if (JSON.stringify(batch) !== JSON.stringify(d.style.batch || [])) write("style", { batch });
+  });
 }
 function refresh() { dirty = false; F = loadForm(SP.get()); update(); }
 

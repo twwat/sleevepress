@@ -242,8 +242,9 @@ async function promo(e, id, scale = 1) {
     ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, 0, W, H);
     ctx.drawImage(await cover(e, W), 0, 0);
     const sy = W, sh = H - W, m = W * 0.06, split = W * 0.58;
-    SR.drawBackdrop(ctx, W, H, { ...st, shape: "none" }, bg, ink, spot, 0.35);
     ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, sy, W, sh);
+    ctx.save(); ctx.beginPath(); ctx.rect(0, sy, W, sh); ctx.clip();
+    SR.drawBackdrop(ctx, W, H, { ...st, shape: "none" }, bg, ink, spot, 0.35); ctx.restore();
     ctx.fillStyle = rgba(spot, 1); ctx.fillRect(0, sy, W, Math.max(4, H * 0.006));
     const big = cta || tag, colW = split - m * 1.5;
     if (cta && tag !== cta) put(ctx, tag, m, sy + sh * 0.3, sh * 0.075, bfn, "700", 0.3, ink, 0.7, colW);

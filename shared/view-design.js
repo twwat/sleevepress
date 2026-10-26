@@ -27,9 +27,13 @@ function write(opts = {}) {
 }
 
 /* ---------- rendering ---------- */
+let drawGen = 0;
 const draw = SP.rafOnce(async () => {
   if (!visible) { stale = true; return; }
-  const b = await SR.render(canvas, st, image, logo);
+  const gen = ++drawGen, snap = { ...st }, c = document.createElement("canvas"); c.width = c.height = PREVIEW;
+  const b = await SR.render(c, snap, image, logo);
+  if (gen !== drawGen) return;   // a newer render has started; this one is out of date
+  canvas.getContext("2d").drawImage(c, 0, 0);
   boxes = b || {}; positionSel();
   el.querySelector(".dz-file").textContent = SR.filename(st, st.exportSize || "3000");
 });
@@ -425,6 +429,7 @@ function positionSel() { if (!selBox) return; const k = SEL_FOR_TAB[tab]; place(
 function bindCanvas() {
   let drag = null;
   overlay.addEventListener("pointermove", (e) => {
+    if (editor.contains(e.target)) return;
     const p = toCanvas(e);
     if (drag) {
       const dx = (p.x - drag.p.x) / PREVIEW * 100, dy = (p.y - drag.p.y) / PREVIEW * 100;
@@ -457,7 +462,7 @@ function bindCanvas() {
   const end = () => { drag = null; };
   overlay.addEventListener("pointerup", end); overlay.addEventListener("pointercancel", end);
   overlay.addEventListener("pointerleave", () => { hoverBox.hidden = true; });
-  overlay.addEventListener("dblclick", (e) => { const k = hitTest(toCanvas(e)); if (k === "title" || k === "artist" || k === "footer") openEditor(k); });
+  overlay.addEventListener("dblclick", (e) => { if (editor.contains(e.target)) return; const k = hitTest(toCanvas(e)); if (k === "title" || k === "artist" || k === "footer") openEditor(k); });
   overlay.addEventListener("wheel", (e) => {
     if (!image || !(e.ctrlKey || e.metaKey) || hitTest(toCanvas(e)) !== "image" && !boxes.image) return;
     e.preventDefault(); set("zoom", Math.max(20, Math.min(300, Math.round(st.zoom * (e.deltaY < 0 ? 1.05 : 0.95)))));
@@ -465,6 +470,7 @@ function bindCanvas() {
   // keyboard nudges for the selected element
   overlay.tabIndex = 0;
   overlay.addEventListener("keydown", (e) => {
+    if (editor.contains(e.target)) return;
     const step = e.shiftKey ? 2 : 0.5, k = SEL_FOR_TAB[tab]; if (!k || !e.key.startsWith("Arrow")) return;
     e.preventDefault(); const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0, dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
     const map = { title: ["titleX", "titleDy"], artist: ["artistX", "artistY"], footer: ["footerX", "footerY"], motif: ["motifX", "motifY"], label: ["labelX", "labelY"], image: ["shiftX", "shiftY"] }[k];
