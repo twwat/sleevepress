@@ -11,8 +11,8 @@ const SCHEMA = "sleevepress.release/1";
 const DEFAULT = () => ({
   schema: SCHEMA,
   release: {
-    artist: "DUPPY WIRE", title: "NINE\nNIGHT", catalog: "DPWR-001", year: "",
-    footer: "KGN — N17 · DPWR-001", format: "EP", label: "DUPPY WIRE SOUND",
+    artist: "TW@T", title: "SLEEVE\nPRESS", catalog: "SLEEVE-001", year: "2026",
+    footer: "SLEEVE-001 · 2026", format: "EP", label: "DUPPY WIRE SOUND",
     date: "", cta: "OUT NOW", links: "Spotify · Apple Music · Bandcamp",
   },
   palette: { bg: "#15120f", ink: "#ece6da", accent: "#9b1b1e", name: "Nine Night", swatches: [], words: "" },
@@ -162,8 +162,11 @@ function load() {
   try { const raw = localStorage.getItem(KEY); if (raw) { db = mergeDefaults(JSON.parse(raw)); return db; } } catch (e) { setStatus("memory"); }
   db = DEFAULT(); return db;
 }
-const persistSoon = (() => { let h; return () => { clearTimeout(h); h = setTimeout(persist, 150); }; })();
+/* Writes are batched; `pending` marks a change that hasn't reached storage yet. */
+let pending = false;
+const persistSoon = (() => { let h; return () => { pending = true; clearTimeout(h); h = setTimeout(persist, 150); }; })();
 function persist() {
+  pending = false;
   db.saved = Date.now();
   try { localStorage.setItem(KEY, JSON.stringify(db)); vault.del("record"); }
   catch (e) { vault.set("record", clone(db)).then(ok => { if (!ok) setStatus("memory"); }); }
@@ -184,7 +187,9 @@ const switchFns = new Set();
 const onSwitch = (fn) => { switchFns.add(fn); return () => switchFns.delete(fn); };
 const switched = () => switchFns.forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
 window.addEventListener("storage", (e) => { if (e.key === KEY) { load(); emit(true); } });
-window.addEventListener("beforeunload", () => { if (db) persist(); });
+// Only flush a change that is still waiting. Saving unconditionally here would write the old release straight back
+// after someone clears the site's storage and reloads.
+window.addEventListener("beforeunload", () => { if (db && pending) persist(); });
 
 /* ---------- shared pictures: the cover image and the label logo ---------- */
 function asset(name, cap, mime) {
