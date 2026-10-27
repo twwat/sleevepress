@@ -267,6 +267,8 @@ function panelFor(t) {
             row(btn("Reroll", () => set("patternSeed", ((st.patternSeed || 1) * 7 + 13) % 9973 + 1)))))] : []),
         st.pattern !== "none" && st.patternArea === "shape" && st.shape === "none" ? hint("Pick a big shape above for the pattern to fill.") : null));
     }
+    P.push(group("Cut-out plates", seg("plates", null, [["none", "None"], ["title", "Behind title"], ["all", "Behind all words"]]),
+      hint("Patches of ground colour behind the words, so a loud pattern or shape can run underneath.")));
     P.push(group("Texture", pick("texture", null, [["none", "None"], ["halftone", "Halftone"], ["lines", "Lines"], ["grid", "Grid"]], drawTexture, { rebuild: true }),
       range("textureAmt", "Strength", 0, 100, 1, { unit: "%", show: () => st.texture !== "none", reset: 45 }),
       row(range("grain", "Grain", 0, 100, 1, { half: true, reset: 28 }), range("vignette", "Vignette", 0, 100, 1, { half: true, reset: 55 }))));

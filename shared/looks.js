@@ -214,6 +214,19 @@ function rects(s) {
   return out;
 }
 
+/* The biggest strip along one side of the sleeve with no words in it, for a full-strength pattern. */
+function boldArea(s) {
+  const boxes = Object.values(rects(s)), gap = 3, min = 24, out = [];
+  if (!boxes.length) return { area: "left", pos: 50 };
+  const top = Math.min(...boxes.map(b => b.y)) - gap, bottom = Math.max(...boxes.map(b => b.y + b.h)) + gap;
+  const left = Math.min(...boxes.map(b => b.x)) - gap, right = Math.max(...boxes.map(b => b.x + b.w)) + gap;
+  if (top >= min) out.push({ area: "top", pos: Math.round(top), size: top });
+  if (100 - bottom >= min) out.push({ area: "bottom", pos: Math.round(bottom), size: 100 - bottom });
+  if (left >= min) out.push({ area: "left", pos: Math.round(left), size: left });
+  if (100 - right >= min) out.push({ area: "right", pos: Math.round(right), size: 100 - right });
+  return out.sort((a, b) => b.size - a.size)[0] || null;
+}
+
 /* Shapes with inner detail or line work: they read as noise behind words. */
 const BUSY_SHAPES = new Set(["bars", "target", "scope", "rays", "chevrons", "squares", "spiral", "wave", "honeycomb", "halftone", "sunset", "web", "snowflake",
   "glass", "rosewindow", "swords", "shuriken", "starburst", "sun", "discs", "eye"]);
@@ -351,20 +364,25 @@ function randomize(state, seed, locks = {}, opts = {}) {
     placePicture(s, rnd, pick, between, chance, hard);
   }
   if (!locks.backdrop) {
-    const pic = s.imgMode === "bleed";
+    const pic = s.imgMode === "bleed" && Looks.picture !== false;
     s.wash = chance(0.35) ? pick(["top", "bottom", "radial", "diagonal"]) : "none"; s.washAmt = between(25, pic ? 55 : 70);
     // One scheme per sleeve: plain ground, a big shape, a pattern, or a pattern working with a shape.
     const pats = patternList();
-    const scheme = dealt(pic ? "scheme:pic" : "scheme", deck(pats.length ? (pic ? [["plain", 4], ["shape", 2], ["pattern", 2], ["combo", 1]] : [["plain", 2], ["shape", 3], ["pattern", 3], ["combo", 2]]) : [["plain", 3], ["shape", 2]]));
-    s.shape = "none"; s.pattern = "none"; s.shapeOutline = false; s.shapeRot = 0;
+    // "bold": the pattern is the hero, full strength on the part of the sleeve the words leave free
+    const scheme = dealt(pic ? "scheme:pic" : "scheme", deck(pats.length ? (pic ? [["plain", 4], ["shape", 2], ["pattern", 2], ["combo", 1], ["bold", 1]] : [["plain", 2], ["shape", 3], ["pattern", 3], ["combo", 2], ["bold", 2]]) : [["plain", 3], ["shape", 2]]));
+    s.shape = "none"; s.pattern = "none"; s.shapeOutline = false; s.shapeRot = 0; s.plates = "none";
     if (scheme === "shape" || scheme === "combo") {
       s.shape = dealt("shape", shapeDeck());
       s.shapeAmt = between(40, pic ? 65 : 95); s.shapeSize = between(35, 85); s.shapeX = between(20, 85); s.shapeY = between(20, 80);
       s.shapeColor = chance(0.75) ? "accent" : "ink";
       s.shapeOutline = scheme === "shape" && chance(0.22); s.shapeRot = chance(0.3) ? between(-25, 25) : 0;
     }
-    if (scheme === "pattern" || scheme === "combo") {
-      const P0 = dealt("pattern", pats); s.pattern = P0.id;
+    const bold = scheme === "bold" ? boldArea(s) : null;
+    if (scheme === "pattern" || scheme === "combo" || scheme === "bold") {
+      // one deck of every pattern, small families entered two or three times so each family gets a fair share
+      // (a 2-pattern family would otherwise be lost among 12 plaids); dealt by card, so no pattern repeats within a pass
+      const famSize = {}; pats.forEach(x => { famSize[x.family] = (famSize[x.family] || 0) + 1; });
+      const P0 = dealt("pattern", deck(pats.map(x => [x, Math.max(1, Math.min(3, Math.round(6 / famSize[x.family])))]))); s.pattern = P0.id;
       s.patternSeed = between(1, 9999); s.patternScale = between(65, 150, 5);
       s.patternAngle = chance(0.25) ? pick([45, -45, 30, 15, -15, 90]) : 0;
       s.patternColor = dealt("patternColor", deck([["ink", 3], ["accent", 2], ["duo", 2]]));
@@ -374,6 +392,12 @@ function randomize(state, seed, locks = {}, opts = {}) {
       // louder patterns get less ink; a picture underneath halves it again
       const busy = P0.busy ?? 0.5;
       s.patternAmt = Math.round(between(30, 75) * (1 - busy * 0.55) * (pic ? 0.6 : 1));
+      // an all-over pattern half the time goes loud, with the words on cut-out plates
+      // plaid, camo, animal prints, checks and fabrics are hero patterns: they want to be seen, so they mostly get plates
+      const hero = ["plaid", "camo", "animal", "check", "fabric"].includes(P0.family);
+      if (!bold && s.patternArea === "full" && !pic && chance(hero ? 0.8 : 0.4)) { s.plates = chance(0.6) ? "all" : "title"; s.patternAmt = between(55, 95); s.patternScale = between(80, 170, 5); }
+      if (bold) { s.patternArea = bold.area; s.patternPos = bold.pos; s.patternAmt = between(70, 100); s.patternScale = between(80, 170, 5); }
+      else if (scheme === "bold") { s.patternArea = "edge"; s.patternAmt = between(60, 90); }   // no free side: a strong pattern border instead
     }
     s.texture = chance(0.3) ? pick(["halftone", "lines", "grid"]) : "none"; s.textureAmt = between(25, 75);
     s.grain = between(8, 55); s.vignette = between(15, 75);
@@ -543,7 +567,8 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
     const checks = [[r.title, s.titleStyle === "block" ? [] : titleCols(), 2.6], [r.artist, [textRgb(s, "artistColor")], 3], [r.footer, [textRgb(s, "footerColor")], 2.4]];
     // detailed shapes (and any shape carrying a pattern) never sit behind the title; plain ones may if the colours hold
     const busy = BUSY_SHAPES.has(s.shape) || (s.pattern !== "none" && s.patternArea === "shape") || s.shapeOutline || ["outline", "echo"].includes(s.titleStyle);
-    const ok = () => !(busy && overlap(shapeRect(), r.title, 1)) && checks.every(([q, cols, t]) => !q || !overlap(shapeRect(), q) ||
+    const plated = (el) => s.plates === "all" || (s.plates === "title" && el === r.title);
+    const ok = () => !(busy && !plated(r.title) && overlap(shapeRect(), r.title, 1)) && checks.every(([q, cols, t]) => !q || plated(q) || !overlap(shapeRect(), q) ||
       cols.every(c => contrast(c, mixRgb(bg, hexToRgb(s.shapeColor === "ink" ? s.ink : s.accent), s.shapeAmt / 100)) >= t));
     // first try moving it somewhere the words aren't (off-centre and half off the edge is a classic look anyway)
     if (!ok()) {
@@ -573,8 +598,10 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
     const P0 = patternList().find(x => x.id === s.pattern), busy = P0 ? P0.busy ?? 0.5 : 0.5;
     const area = patternRect(s), hollow = ["outline", "echo"].includes(s.titleStyle);
     const under = (q) => q && (s.patternArea === "shape" ? overlap(R(s.shapeX - s.shapeSize / 2, s.shapeY - s.shapeSize / 2, s.shapeSize, s.shapeSize), q) : area.some(a => overlap(a, q)));
-    const loudTitle = r.title && under(r.title) && s.titleStyle !== "block";
-    const cap = loudTitle ? (hollow || FINE.has(s.font) ? 0.12 : 0.2) : (under(r.artist) || under(r.footer)) ? 0.3 : 0.55;
+    const titlePlated = s.plates === "all" || s.plates === "title", allPlated = s.plates === "all";
+    const loudTitle = r.title && under(r.title) && s.titleStyle !== "block" && !titlePlated;
+    const smallUnder = !allPlated && (under(r.artist) || under(r.footer) || under(r.year) || under(r.motif));
+    const cap = loudTitle ? (hollow || FINE.has(s.font) ? 0.12 : 0.2) : smallUnder ? 0.3 : 1;
     if (busy * s.patternAmt / 100 > cap) s.patternAmt = Math.max(8, Math.floor(cap / busy * 100));
     if (loudTitle && hollow && busy > 0.6 && !hard.type) s.titleStyle = "solid";
   }
@@ -632,7 +659,10 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
         const start = Math.floor(rnd() * 4);
         for (let i = 0; i < 4; i++) {
           const [cx, cy] = spots[(start + i) % 4];
-          if (busy.every(b => !overlap(R(cx - w / 2, cy - h / 2, w, h), b, 2))) {
+          // and never on a loud pattern strip
+          const loud = s.pattern !== "none" && s.patternArea !== "shape" &&
+            (((patternList().find(x => x.id === s.pattern) || {}).busy ?? 0.5) * s.patternAmt / 100 > 0.15);
+          if (busy.every(b => !overlap(R(cx - w / 2, cy - h / 2, w, h), b, 2)) && !(loud && patternRect(s).some(a => overlap(a, R(cx - w / 2, cy - h / 2, w, h), 1)))) {
             s.labelMark = kind; s.labelSize = Math.round(k * 100); s.labelX = Math.round(cx * 2) / 2; s.labelY = Math.round(cy * 2) / 2;
             s.labelColor = chance(0.25) ? "accent" : "ink"; s.labelOpacity = between(60, 90, 5); break;
           }
@@ -665,7 +695,7 @@ const GROUP_KEYS = {
     "titleX", "artistX", "footerX", "motifX", "artistRotate"],
   motif: ["motifKind", "motifSize", "motifPitch", "count", "missing", "missingStyle"],
   border: ["frame", "frameStyle", "frameInset", "frameWidth", "frameOpacity", "frameColor", "barcodeStyle"],
-  backdrop: ["wash", "washAmt", "shape", "shapeAmt", "shapeSize", "shapeX", "shapeY", "shapeColor", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale",
+  backdrop: ["plates", "wash", "washAmt", "shape", "shapeAmt", "shapeSize", "shapeX", "shapeY", "shapeColor", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale",
     "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed", "texture", "textureAmt", "grain", "vignette"],
   picture: ["imgMode", "imgTone", "dim", "imgPosterize", "imgContrast", "imgBlur", "imgBoxSize", "imgBoxX", "imgBoxY"],
 };

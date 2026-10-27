@@ -788,10 +788,541 @@ function topo(P) {
 }
 
 /* ======================================================================
+   INK ROLES for the woven, camo and animal families.
+   Each role is [r, g, b, alpha, knockout]. Everything is fg, fg2 or ground, or a blend of them:
+     G ground (nothing)   A/a/h/q fg at full/mid/light/faint   B/b fg2 full/light   M fg+fg2 mixed
+     D the darker of (fg2, ground)  L the lighter one  (a knockout when that is the ground itself)
+     d/l halfway from A towards D/L.   T/U light/strong animal coat (stronger when D is a knockout).
+   So a "black" bar on a dark sleeve is cut back to the ground, and on a light one it is printed in the dark ink.
+   ====================================================================== */
+function inks(P) {
+  if (P._inks) return P._inks;
+  const fg = P.fg, fg2 = P.fg2, bg = P.bg;
+  const same = Math.abs(fg[0] - fg2[0]) + Math.abs(fg[1] - fg2[1]) + Math.abs(fg[2] - fg2[2]) < 48;
+  const KO = [0, 0, 0, 0, 1], C = (c, a) => [c[0], c[1], c[2], a, 0];
+  const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, 1, 0];
+  const ref = same ? fg : fg2, darkG = lum(bg) <= lum(ref);
+  const k = same ? 0.62 : 1;   // one ink only: keep fg itself for D/L and print the "main" colour as a tint
+  const D = darkG ? KO : C(ref, 1), L = darkG ? C(ref, 1) : KO;
+  return (P._inks = {
+    G: [0, 0, 0, 0, 0], K: KO,
+    A: C(fg, k), a: C(fg, k * 0.55), h: C(fg, k * 0.3), q: C(fg, k * 0.14),
+    B: C(fg2, 1), b: C(fg2, same ? 0.42 : 0.5),
+    M: same ? C(fg, 0.82) : mix(fg, fg2, 0.5),
+    D, L,
+    d: D[4] ? C(fg, k * 0.4) : mix(fg, D, 0.55),
+    // animal coats: when the dark markings are cut back to a dark ground, the coat has to carry more ink
+    T: D[4] ? C(fg, k * 0.62) : C(fg, k * 0.3), U: D[4] ? C(fg, k * 0.9) : C(fg, k * 0.55),
+    e: D[4] ? [0, 0, 0, 0.45, 1] : mix(fg, D, 0.45),   // "a shade darker": a partial knockout on dark grounds (vector/field families only)
+    l: L[4] ? C(fg, k * 0.4) : mix(fg, L, 0.55),
+  });
+}
+/* fill a path in a role (knockouts cut the layer back to the ground) */
+function inkFill(g, role, path) {
+  g.save();
+  if (role[4]) { g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000"; g.globalAlpha = role[3] || 1; }
+  else g.fillStyle = rgba(role, role[3]);
+  g.fill(path); g.restore();
+}
+
+/* ======================================================================
+   PLAID: a woven-sett engine.
+   A sett is a threadcount ("A24 D4 A4 ...", role letter + threads). Warp threads run down, weft across;
+   at every thread crossing the weave decides which one is on top (2/2 twill, or plain 1/1), so where a
+   stripe crosses a different stripe the two colours interleave into the diagonal twill mix of real cloth.
+   ====================================================================== */
+function sett(P, name, o) {
+  const R = inks(P);
+  const parse = (s) => s.trim().split(/\s+/).map(tk => [tk[0], +tk.slice(1)]);
+  const full = (s) => { const h = parse(s); return o.sym === false ? h : h.concat(h.slice(1, -1).reverse()); };
+  const per = o.weave === "plain" ? 2 : 4;
+  const target = P.s * (o.size || 0.36);
+  const fit = (bands, t) => {
+    if (o.exact) return bands.map(b => [b[0], b[1]]);
+    const sum = bands.reduce((a, b) => a + b[1], 0), f = target / t / sum;
+    const out = bands.map(([c, w]) => [c, Math.max(w <= 3 ? 1 : 2, Math.round(w * f))]);
+    const tot = out.reduce((a, b) => a + b[1], 0);
+    let big = 0; out.forEach((b, i) => { if (b[1] > out[big][1]) big = i; });
+    out[big][1] += (per - tot % per) % per;
+    return out;
+  };
+  let wa = full(o.sett), we = o.weft ? full(o.weft) : wa;
+  const t = o.exact ? Math.max(1, Math.round(target / wa.reduce((a, b) => a + b[1], 0))) : Math.max(1, Math.round(P.S * 0.0022 * Math.sqrt(P.k)));
+  wa = fit(wa, t); we = o.weft ? fit(we, t) : wa;
+  const threads = (b) => { const r = []; for (const [c, w] of b) for (let i = 0; i < w; i++) r.push(c); return r; };
+  const tw = threads(wa), tf = threads(we), W = tw.length * t, H = tf.length * t;
+  const tex = o.tex == null ? 0.16 : o.tex, fz = o.fuzz || 0;
+  const pack = (c, m) => { const a = Math.round(c[3] * m * 255); return a ? ((a << 24) | (Math.round(c[2]) << 16) | (Math.round(c[1]) << 8) | Math.round(c[0])) >>> 0 : 0; };
+  const c = tile(P, name, W, H, (g) => {
+    const img = g.createImageData(W, H), u32 = new Uint32Array(img.data.buffer);
+    const col = (r) => { const c = R[r] || R.G; return c[4] ? R.G : c; };   // knockouts are simply bare ground in cloth
+    const pw = tw.map(r => pack(col(r), 1)), pf = tf.map(r => pack(col(r), 1 - tex));
+    const mask = per === 4 ? 3 : 1, lim = per === 4 ? 2 : 1;
+    for (let y = 0; y < H; y++) {
+      const j = (y / t) | 0, wf = pf[j], row = y * W;
+      for (let x = 0; x < W; x++) { const i = (x / t) | 0; u32[row + x] = ((i + j) & mask) < lim ? pw[i] : wf; }
+    }
+    if (fz) {   // brushed flannel: thread-level speckle
+      const d = img.data;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const p = (y * W + x) * 4 + 3; if (!d[p]) continue;
+        d[p] = d[p] * (1 - fz * hash3(x, y, 77)) | 0;
+      }
+    }
+    g.putImageData(img, 0, 0);
+  });
+  fillTile(P, c, -W / 2, -H / 2);
+}
+const PLAIDS = {
+  buffalo: { sett: "A24 D24", sym: false, size: 0.3, tex: 0.1 },
+  // B22 K2 B2 K2 B2 K16 G16 K2 G16 K16 B16 K2  (navy -> mixed, green -> mid, black -> dark)
+  blackwatch: { sett: "d22 D3 d3 D3 d3 D16 b18 D3 b18 D16 d16 D3", size: 0.5 },
+  // R72 B8 K12 Y2 K2 W2 K2 G16 R8 K2 R4 W2
+  stewart: { sett: "A72 M8 D12 B2 D2 L2 D2 d16 A8 D2 A4 L2", size: 0.5 },
+  dressgordon: { sett: "G26 D3 G3 D3 G3 D16 a18 B3 a18 D16 A18 D3", size: 0.42 },
+  madras: { sett: "A10 G2 B6 M2 a8 G3 h10 B2 A3 G2 b8 M5 a3 G6 A2 h6", weft: "h8 A3 G2 M8 b3 A12 G2 B4 a6 G4 h3 M2 A6 b6", sym: false, size: 0.34, weave: "plain", tex: 0.22 },
+  windowpane: { sett: "q46 A3", sym: false, size: 0.3, tex: 0.3 },
+  tattersall: { sett: "G12 A2 G12 B2", sym: false, size: 0.2, tex: 0.1 },
+  flannel: { sett: "A20 D4 A2 D4 A2 D14 L2 D14 d12", size: 0.36, fuzz: 0.35 },
+  heritage: { sett: "h44 D6 h6 D6 h6 D6 h24 L4 h20 A3", size: 0.44 },
+  shepherd: { sett: "D8 L8", sym: false, exact: true, size: 0.07 },
+  glen: (() => {   // Prince of Wales: 4-and-4 blocks beside 2-and-2 blocks, with an overcheck
+    const s = []; for (let i = 0; i < 6; i++) s.push("D4", "L4");
+    for (let i = 0; i < 9; i++) s.push("D2", i === 4 ? "A2" : "L2");
+    return { sett: s.join(" "), sym: false, exact: true, size: 0.5 };
+  })(),
+};
+const plaid = (key) => (P) => sett(P, key, PLAIDS[key]);
+
+/* ======================================================================
+   FIELD TILES: periodic noise / distance fields on a grid, rasterised per pixel with
+   analytic anti-aliasing (|gradient| gives each edge a 1px ramp), composited in ink roles.
+   ====================================================================== */
+function pnoise(seed) {
+  const rnd = mulberry32(seed), perm = new Uint8Array(512), gx = new Float32Array(256), gy = new Float32Array(256);
+  const a = new Uint8Array(256); for (let i = 0; i < 256; i++) a[i] = i;
+  for (let i = 255; i > 0; i--) { const j = (rnd() * (i + 1)) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; }
+  for (let i = 0; i < 512; i++) perm[i] = a[i & 255];
+  for (let i = 0; i < 256; i++) { const t = rnd() * TAU; gx[i] = Math.cos(t); gy[i] = Math.sin(t); }
+  const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+  return function (x, y, px, py) {   // periodic in x with period px, y with py (integers)
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const X0 = ((xi % px) + px) % px, Y0 = ((yi % py) + py) % py, X1 = (X0 + 1) % px, Y1 = (Y0 + 1) % py;
+    const h00 = perm[perm[X0] + Y0], h10 = perm[perm[X1] + Y0], h01 = perm[perm[X0] + Y1], h11 = perm[perm[X1] + Y1];
+    const n00 = gx[h00] * xf + gy[h00] * yf, n10 = gx[h10] * (xf - 1) + gy[h10] * yf;
+    const n01 = gx[h01] * xf + gy[h01] * (yf - 1), n11 = gx[h11] * (xf - 1) + gy[h11] * (yf - 1);
+    const u = fade(xf), v = fade(yf), x1 = n00 + u * (n10 - n00), x2 = n01 + u * (n11 - n01);
+    return (x1 + v * (x2 - x1)) * 1.3;
+  };
+}
+/* fbm on an n×n periodic grid. o = { px, py (lattice periods across the tile), oct, gain, ridge, warp, wpx }.
+   Each octave is evaluated at ~6 samples per lattice cell and upsampled, and the warp is a resample, so the
+   cost hardly depends on n. */
+function upsample(src, rx, ry, n, out, amp) {   // periodic bilinear, accumulates amp * src into out (n×n)
+  for (let j = 0; j < n; j++) {
+    const gy = j * ry / n, y0 = gy | 0, fy = gy - y0, r0 = y0 * rx, r1 = ((y0 + 1) % ry) * rx, row = j * n;
+    for (let i = 0; i < n; i++) {
+      const gx = i * rx / n, x0 = gx | 0, fx = gx - x0, x1 = (x0 + 1) % rx;
+      const a = src[r0 + x0], b = src[r0 + x1], c = src[r1 + x0], d = src[r1 + x1];
+      out[row + i] += amp * (a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy);
+    }
+  }
+}
+function noiseLayer(nz, fx, fy, n, per, ridge, ox = 0, oy = 0) {
+  const rx = Math.min(n, Math.ceil(fx * per)), ry = Math.min(n, Math.ceil(fy * per)), g = new Float32Array(rx * ry);
+  for (let j = 0; j < ry; j++) for (let i = 0; i < rx; i++) { let r = nz(i * fx / rx + ox, j * fy / ry + oy, fx, fy); if (ridge) r = 0.5 - Math.abs(r); g[j * rx + i] = r; }
+  return [g, rx, ry];
+}
+function fbmGrid(n, seed, o) {
+  const nz = pnoise(seed), F = new Float32Array(n * n);
+  const oct = o.oct || 4, gain = o.gain || 0.5, per = o.ridge ? 7 : 5;
+  let amp = 1, norm = 0, fx = o.px, fy = o.py || o.px;
+  for (let k = 0; k < oct && (k < 2 || Math.max(fx, fy) * 2.5 <= n); k++) { const [g, rx, ry] = noiseLayer(nz, fx, fy, n, per, o.ridge, k * 13.7, k * 7.1); upsample(g, rx, ry, n, F, amp); norm += amp; amp *= gain; fx *= 2; fy *= 2; }
+  for (let i = 0; i < F.length; i++) F[i] /= norm;
+  if (!o.warp) return F;
+  const nw = pnoise(seed ^ 0x5bd1e995), wp = o.wpx || 2, du = new Float32Array(n * n), dv = new Float32Array(n * n);
+  { const [g, rx, ry] = noiseLayer(nw, wp, wp, n, 6, 0); upsample(g, rx, ry, n, du, o.warp * n); }
+  { const [g, rx, ry] = noiseLayer(nw, wp, wp, n, 6, 0, 31.3, 7.7); upsample(g, rx, ry, n, dv, o.warp * n); }
+  const W = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const k = j * n + i, gx = i + du[k] + n * 4, gy = j + dv[k] + n * 4, x0 = Math.floor(gx), y0 = Math.floor(gy), fx2 = gx - x0, fy2 = gy - y0;
+    const X0 = x0 % n, X1 = (x0 + 1) % n, Y0 = (y0 % n) * n, Y1 = ((y0 + 1) % n) * n;
+    const a = F[Y0 + X0], b = F[Y0 + X1], c = F[Y1 + X0], d = F[Y1 + X1];
+    W[k] = a + (b - a) * fx2 + (c - a) * fy2 + (a - b - c + d) * fx2 * fy2;
+  }
+  return W;
+}
+/* Path builder that writes SVG path data (integer tenths, cheap to format) and makes one Path2D at
+   the end, for motifs built once and reused; draw the result scaled by 1/10. */
+const f2 = (v) => Math.round(v * 10);
+function PathStr() { this.d = []; }
+PathStr.prototype.moveTo = function (x, y) { this.d.push("M" + f2(x) + " " + f2(y)); };
+PathStr.prototype.lineTo = function (x, y) { this.d.push("L" + f2(x) + " " + f2(y)); };
+PathStr.prototype.quadraticCurveTo = function (a, b, x, y) { this.d.push("Q" + f2(a) + " " + f2(b) + " " + f2(x) + " " + f2(y)); };
+PathStr.prototype.closePath = function () { this.d.push("Z"); };
+PathStr.prototype.done = function () { return new Path2D(this.d.join("")); };
+
+/* Closed outlines of { F > th } for an n×n periodic grid over a T×T tile, as one smoothed Path2D.
+   Oriented marching squares; the grid is read 2 nodes past each edge (wrapped) and walled off beyond
+   that, so every loop closes outside the tile while everything inside it matches across the seam. */
+function contour(F, n, T, th) {
+  const E = 2, lo = -E - 1, hi = n + E + 1, w = hi - lo + 1, cs = T / n;
+  const V = new Float32Array(w * w);
+  for (let j = lo; j <= hi; j++) for (let i = lo; i <= hi; i++)
+    V[(j - lo) * w + (i - lo)] = (i === lo || j === lo || i === hi || j === hi) ? -1e9 : F[(((j % n) + n) % n) * n + (((i % n) + n) % n)] - th;
+  const sx = [], sy = [], sk = [], ek = [], start = new Int32Array(w * w * 2).fill(-1), cx = [0, 0, 0, 0], cy = [0, 0, 0, 0], ck = [0, 0, 0, 0], ct = [0, 0, 0, 0];
+  for (let j = 0; j < w - 1; j++) for (let i = 0; i < w - 1; i++) {
+    const a = V[j * w + i], b = V[j * w + i + 1], c = V[(j + 1) * w + i + 1], d = V[(j + 1) * w + i];
+    const m = (a > 0 ? 1 : 0) | (b > 0 ? 2 : 0) | (c > 0 ? 4 : 0) | (d > 0 ? 8 : 0);
+    if (m === 0 || m === 15) continue;
+    const x0 = (i + lo) * cs, y0 = (j + lo) * cs; let k = 0;
+    // edges clockwise: top (a->b), right (b->c), bottom (c->d), left (d->a); crossing type 1 = leaving the inside
+    if ((a > 0) !== (b > 0)) { const t = a / (a - b); cx[k] = x0 + t * cs; cy[k] = y0; ck[k] = (j * w + i) * 2; ct[k++] = a > 0; }
+    if ((b > 0) !== (c > 0)) { const t = b / (b - c); cx[k] = x0 + cs; cy[k] = y0 + t * cs; ck[k] = (j * w + i + 1) * 2 + 1; ct[k++] = b > 0; }
+    if ((c > 0) !== (d > 0)) { const t = c / (c - d); cx[k] = x0 + cs - t * cs; cy[k] = y0 + cs; ck[k] = ((j + 1) * w + i) * 2; ct[k++] = c > 0; }
+    if ((d > 0) !== (a > 0)) { const t = d / (d - a); cx[k] = x0; cy[k] = y0 + cs - t * cs; ck[k] = (j * w + i) * 2 + 1; ct[k++] = d > 0; }
+    const join = k === 4 && (a + b + c + d) > 0;
+    for (let q = 0; q < k; q++) if (ct[q]) {
+      const r = join || k === 2 ? (q + 1) % k : (q + k - 1) % k;
+      start[ck[q]] = sx.length; sx.push(cx[q]); sy.push(cy[q]); sk.push(ck[q]); ek.push(ck[r]);
+    }
+  }
+  const path = new Path2D(), seen = new Uint8Array(sx.length), xs = [], ys = [];
+  for (let s0 = 0; s0 < sx.length; s0++) {
+    if (seen[s0]) continue;
+    xs.length = ys.length = 0; let s = s0;
+    while (s >= 0 && !seen[s]) { seen[s] = 1; xs.push(sx[s]); ys.push(sy[s]); s = start[ek[s]]; }
+    const L = xs.length; if (L < 3) continue;
+    path.moveTo((xs[L - 1] + xs[0]) / 2, (ys[L - 1] + ys[0]) / 2);
+    for (let q = 0; q < L; q++) { const r = q + 1 === L ? 0 : q + 1; path.quadraticCurveTo(xs[q], ys[q], (xs[q] + xs[r]) / 2, (ys[q] + ys[r]) / 2); }
+    path.closePath();
+  }
+  return path;
+}
+/* A tile built from scalar fields on a periodic grid (gridStep px apart).
+   build(n, R) -> { fields: [Float32Array n*n], layers: [{ f (-1 = solid), th, ink }] } ; after(g, T, R) draws extras on top. */
+function fieldTile(P, name, T, gridStep, build, after) {
+  T = Math.max(8, Math.round(T));
+  const n = clamp(Math.round(T / gridStep), Math.min(48, T >> 1), 240);
+  return tile(P, name, T, T, (g) => {
+    const R = inks(P), { fields, layers } = build(n, R);
+    for (const ly of layers) {
+      if (ly.f < 0) { g.save(); if (ly.ink[4]) { g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000"; } else g.fillStyle = rgba(ly.ink, ly.ink[3]); g.fillRect(0, 0, T, T); g.restore(); continue; }
+      inkFill(g, ly.ink, contour(fields[ly.f], n, T, ly.th));
+    }
+    if (after) after(g, T, R);
+  });
+}
+/* stripes as a continuous field: >0 inside a stripe of width w (in phase units) centred on whole phases */
+const stripeVal = (phase, w) => { const f = phase - Math.floor(phase); return w / 2 - Math.min(f, 1 - f); };
+const seedOf = (P, k = 0) => (hashStr(P.id + ":" + k) ^ Math.imul(P.seed + 1, 2654435761)) >>> 0;
+
+/* ---------- vector motifs on a tile ---------- */
+/* emit fn(dx, dy) for each tile-wrapped copy of a motif of radius r at (x, y) that touches the tile */
+function wrapAt(T, x, y, r, f) {
+  for (const dy of [-T, 0, T]) { if (y + dy + r < 0 || y + dy - r > T) continue;
+    for (const dx of [-T, 0, T]) { if (x + dx + r < 0 || x + dx - r > T) continue; f(dx, dy); } }
+}
+function blobPts(rnd, r, k, jit, sx = 1, sy = 1, rot = 0) {
+  const pts = [], c = Math.cos(rot), s = Math.sin(rot);
+  for (let i = 0; i < k; i++) {
+    const a = (i + (rnd() - 0.5) * 0.5) * TAU / k, rr = r * (1 - jit / 2 + rnd() * jit), u = Math.cos(a) * rr * sx, v = Math.sin(a) * rr * sy;
+    pts.push(u * c - v * s, u * s + v * c);
+  }
+  return pts;
+}
+/* smooth closed curve through midpoints */
+function smoothPath(path, pts, x, y) {
+  const n = pts.length;
+  path.moveTo(x + (pts[n - 2] + pts[0]) / 2, y + (pts[n - 1] + pts[1]) / 2);
+  for (let i = 0; i < n; i += 2) { const j = (i + 2) % n; path.quadraticCurveTo(x + pts[i], y + pts[i + 1], x + (pts[i] + pts[j]) / 2, y + (pts[i + 1] + pts[j + 1]) / 2); }
+  path.closePath();
+}
+/* jittered points on an m×m periodic lattice of a T tile */
+function jitter(m, T, seed, j = 0.8) {
+  const pts = [], c = T / m;
+  for (let y = 0; y < m; y++) for (let x = 0; x < m; x++)
+    pts.push((x + 0.5 + (hash3(x, y, seed) - 0.5) * j) * c, (y + 0.5 + (hash3(x, y, seed + 1) - 0.5) * j) * c, hash3(x, y, seed + 2), hash3(x, y, seed + 3));
+  return pts;   // x, y, u, v
+}
+
+/* ======================================================================
+   CAMO
+   ====================================================================== */
+function camoWoodland(P) {
+  const s0 = seedOf(P), T = P.s * 0.72;
+  const c = fieldTile(P, "wood", T, 9, (n, R) => ({
+    fields: [
+      fbmGrid(n, s0, { px: 3, py: 4, oct: 4, warp: 0.08 }),
+      fbmGrid(n, s0 + 1, { px: 3, py: 5, oct: 4, warp: 0.1 }),
+      fbmGrid(n, s0 + 2, { px: 4, py: 6, oct: 4, warp: 0.12 }),
+      fbmGrid(n, s0 + 3, { px: 4, py: 7, oct: 3, ridge: 1, warp: 0.15 }),
+    ],
+    layers: [{ f: 0, th: -0.05, ink: R.h }, { f: 1, th: 0.1, ink: R.a }, { f: 2, th: 0.16, ink: R.A }, { f: 3, th: 0.43, ink: R.D }],
+  }));
+  fillTile(P, c);
+}
+function camoDesert(P) {
+  const s0 = seedOf(P), T = P.s * 0.8;
+  const c = fieldTile(P, "desert", T, 10, (n, R) => ({
+    fields: [fbmGrid(n, s0, { px: 2, py: 3, oct: 3, gain: 0.4, warp: 0.12 }), fbmGrid(n, s0 + 1, { px: 3, py: 4, oct: 3, gain: 0.4, warp: 0.12 })],
+    layers: [{ f: 0, th: -0.08, ink: R.h }, { f: 1, th: 0.12, ink: R.a }],
+  }), (g, T, R) => {   // chocolate-chip rocks: dark pebbles with a light chip beside each
+    const pts = jitter(9, T, s0 + 9, 0.9), dark = new Path2D(), lite = new Path2D(), r0 = T * 0.012;
+    for (let i = 0; i < pts.length; i += 4) {
+      const rf = mulberry32(s0 + i), r = r0 * (0.7 + pts[i + 2] * 0.9), x = pts[i], y = pts[i + 1];
+      const pd = blobPts(rf, r, 6, 0.5, 1.3, 0.85, rf() * TAU), pl = blobPts(rf, r * 0.7, 6, 0.5, 1.2, 0.8, rf() * TAU);
+      const a = rf() * TAU, ox = Math.cos(a) * r * 1.6, oy = Math.sin(a) * r * 1.6;
+      wrapAt(T, x, y, r * 3, (dx, dy) => { smoothPath(dark, pd, x + dx, y + dy); smoothPath(lite, pl, x + dx + ox, y + dy + oy); });
+      if (pts[i + 3] < 0.45) { const pd2 = blobPts(rf, r * 0.6, 6, 0.5), x2 = x - ox * 0.9 + oy, y2 = y - oy * 0.9 - ox; wrapAt(T, x2, y2, r, (dx, dy) => smoothPath(dark, pd2, x2 + dx, y2 + dy)); }
+    }
+    inkFill(g, R.L, lite); inkFill(g, R.D, dark);
+  });
+  fillTile(P, c);
+}
+function camoDigital(P) {
+  const s0 = seedOf(P), px = Math.max(2, Math.round(P.s * 0.011)), m = clamp(Math.round(P.s * 0.6 / px), 24, 200), T = m * px;
+  const c = tile(P, "digi", T, T, (g) => {
+    const R = inks(P), n = m;
+    const f1 = fbmGrid(n, s0, { px: 3, py: 4, oct: 5, gain: 0.55, warp: 0.1 }), f2 = fbmGrid(n, s0 + 1, { px: 4, py: 5, oct: 5, gain: 0.55, warp: 0.1 }), f3 = fbmGrid(n, s0 + 2, { px: 5, py: 6, oct: 5, gain: 0.6 });
+    const bins = [R.h, R.a, R.A, R.D], paths = bins.map(() => new Path2D());
+    for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) {
+      const k = j * m + i, dz = (hash3(i, j, s0) - 0.5) * 0.12;
+      let b = -1;
+      if (f1[k] + dz > -0.04) b = 0;
+      if (f2[k] + dz > 0.08) b = 1;
+      if (f1[k] - dz > 0.2) b = 2;
+      if (f3[k] + dz > 0.24) b = 3;
+      if (b >= 0) paths[b].rect(i * px, j * px, px, px);
+    }
+    bins.forEach((r, i) => { g.save(); if (r[4]) { g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000"; } else g.fillStyle = rgba(r, 1); g.globalAlpha = r[4] ? 1 : r[3]; g.fill(paths[i]); g.restore(); });
+  });
+  fillTile(P, c);
+}
+function camoTiger(P) {
+  const s0 = seedOf(P), T = P.s * 0.7;
+  const c = fieldTile(P, "tigercamo", T, 7, (n, R) => ({
+    fields: [fbmGrid(n, s0, { px: 2, py: 9, oct: 4, warp: 0.05, wpx: 3 }), fbmGrid(n, s0 + 1, { px: 3, py: 14, oct: 4, warp: 0.06, wpx: 3 })],
+    layers: [{ f: 0, th: -0.02, ink: R.a }, { f: 1, th: 0.2, ink: R.D }, { f: 0, th: 0.42, ink: R.A }],
+  }));
+  fillTile(P, c);
+}
+function camoSplinter(P) {
+  const s0 = seedOf(P), T = Math.round(P.s * 0.7);
+  const c = tile(P, "splinter", T, T, (g) => {
+    const R = inks(P), A = new Path2D(), B = new Path2D(), rain = new Path2D(), dir = -0.5 + (hash3(1, 2, s0) - 0.5) * 0.3;
+    const shard = (path, m, seed, size, al) => {
+      const pts = jitter(m, T, seed, 0.9);
+      for (let i = 0; i < pts.length; i += 4) {
+        if (pts[i + 2] > al) continue;
+        const rf = mulberry32(seed + i * 31), x = pts[i], y = pts[i + 1], r = T / m * size * (0.8 + rf() * 0.5), k = 4 + ((rf() * 3) | 0), q = [];
+        const a0 = dir + (rf() - 0.5) * 0.5, c0 = Math.cos(a0), s1 = Math.sin(a0);
+        for (let v = 0; v < k; v++) { const a = (v + (rf() - 0.5) * 0.7) * TAU / k, rr = r * (0.35 + rf() * 0.75), u = Math.cos(a) * rr * 1.7, w = Math.sin(a) * rr * 0.7; q.push(u * c0 - w * s1, u * s1 + w * c0); }
+        wrapAt(T, x, y, r * 1.8, (dx, dy) => { path.moveTo(x + dx + q[0], y + dy + q[1]); for (let v = 2; v < q.length; v += 2) path.lineTo(x + dx + q[v], y + dy + q[v + 1]); path.closePath(); });
+      }
+    };
+    shard(A, 6, s0, 0.95, 0.85); shard(B, 7, s0 + 50, 0.7, 0.6);
+    // rain: short vertical dashes, tight rows
+    const dw = Math.max(1, Math.round(T * 0.004)), gap = Math.max(3, Math.round(T / 70)), dl = gap * 2.2;
+    for (let x = 0; x < T; x += gap) for (let y0 = hash3(x, 0, s0) * dl * 2; y0 < T; y0 += dl * (1.6 + hash3(x, y0 | 0, s0) * 1.4)) rain.rect(x, y0, dw, Math.min(dl, T - y0));
+    g.fillStyle = rgba(R.a, R.a[3]); g.fill(A);
+    inkFill(g, R.A, B);
+    inkFill(g, R.D, rain);
+  });
+  fillTile(P, c);
+}
+function camoUrban(P) {
+  const s0 = seedOf(P), T = P.s * 0.66;
+  const c = fieldTile(P, "urban", T, 8, (n, R) => ({
+    fields: [fbmGrid(n, s0, { px: 3, py: 3, oct: 5, gain: 0.62 }), fbmGrid(n, s0 + 1, { px: 4, py: 4, oct: 5, gain: 0.62 }), fbmGrid(n, s0 + 2, { px: 5, py: 5, oct: 5, gain: 0.65 })],
+    layers: [{ f: 0, th: -0.1, ink: R.q }, { f: 0, th: 0.05, ink: R.h }, { f: 1, th: 0.1, ink: R.a }, { f: 2, th: 0.22, ink: R.A }, { f: 1, th: 0.36, ink: R.L }],
+  }));
+  fillTile(P, c);
+}
+function camoMulti(P) {
+  const s0 = seedOf(P), T = P.s * 0.8;
+  const c = fieldTile(P, "multi", T, 10, (n, R) => ({
+    fields: [fbmGrid(n, s0, { px: 2, py: 3, oct: 3, warp: 0.1 }), fbmGrid(n, s0 + 1, { px: 3, py: 4, oct: 3, warp: 0.1 }), fbmGrid(n, s0 + 2, { px: 8, py: 9, oct: 3, warp: 0.08 }), fbmGrid(n, s0 + 3, { px: 7, py: 10, oct: 3, ridge: 1 }), fbmGrid(n, s0 + 4, { px: 9, py: 8, oct: 3 })],
+    layers: [{ f: 0, th: -0.16, ink: R.q }, { f: 0, th: -0.08, ink: R.q }, { f: 0, th: 0.0, ink: R.q }, { f: 0, th: 0.08, ink: R.q }, { f: 1, th: 0.06, ink: R.q }, { f: 1, th: 0.13, ink: R.h },
+      { f: 2, th: 0.34, ink: R.A }, { f: 3, th: 0.45, ink: R.B }, { f: 4, th: 0.44, ink: R.L }],
+  }));
+  fillTile(P, c);
+}
+
+/* ======================================================================
+   ANIMAL
+   ====================================================================== */
+function zebra(P) {
+  const s0 = seedOf(P), T = P.s * 0.8, m = 8;
+  const c = fieldTile(P, "zebra", T, 7, (n, R) => {
+    const a = fbmGrid(n, s0, { px: 2, py: 2, oct: 3, warp: 0.1 }), b = fbmGrid(n, s0 + 1, { px: 4, py: 3, oct: 3 }), wv = fbmGrid(n, s0 + 2, { px: 3, py: 3, oct: 2 }), F = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; F[k] = stripeVal(m * i / n + a[k] * 3.2 + b[k] * 0.9 + Math.sin(TAU * j / n) * 0.6, 0.5 + wv[k] * 0.7); }
+    return { fields: [F], layers: [{ f: 0, th: 0, ink: R.A }] };
+  });
+  fillTile(P, c);
+}
+function tiger(P) {
+  const s0 = seedOf(P), T = P.s * 0.8, m = 9;
+  const c = fieldTile(P, "tiger", T, 6, (n, R) => {
+    const a = fbmGrid(n, s0, { px: 2, py: 2, oct: 3, warp: 0.1 }), b = fbmGrid(n, s0 + 1, { px: 4, py: 6, oct: 3 }), wv = fbmGrid(n, s0 + 2, { px: 3, py: 7, oct: 3 }), F = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; F[k] = stripeVal(m * i / n + a[k] * 1.1 + b[k] * 0.45 + Math.sin(TAU * j / n) * 0.4, 0.21 + wv[k] * 0.42); }
+    return { fields: [F], layers: [{ f: -1, ink: R.U }, { f: 0, th: 0, ink: R.D }] };
+  });
+  fillTile(P, c);
+}
+function tabby(P) {
+  const s0 = seedOf(P), T = P.s * 0.6, m = 15;
+  const c = fieldTile(P, "tabby", T, 4.5, (n, R) => {
+    const a = fbmGrid(n, s0, { px: 2, py: 2, oct: 3, warp: 0.1 }), fur = fbmGrid(n, s0 + 1, { px: 6, py: 40, oct: 2 });
+    const wv = fbmGrid(n, s0 + 2, { px: 5, py: 9, oct: 3 }), F1 = new Float32Array(n * n), F2 = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i, ph = m * i / n + a[k] * 1.6 + Math.sin(TAU * j / n) * 0.5 + fur[k] * 0.045; F1[k] = stripeVal(ph, 0.42 + wv[k] * 0.3); F2[k] = stripeVal(ph, 0.18 + wv[k] * 0.4 + fur[k] * 0.12); }
+    return { fields: [F1, F2], layers: [{ f: -1, ink: R.U }, { f: 0, th: 0, ink: R.e }, { f: 1, th: 0, ink: R.D }] };
+  });
+  fillTile(P, c);
+}
+function giraffe(P) {
+  const s0 = seedOf(P), T = P.s * 0.8, m = 5, cell = T / m;
+  const c = fieldTile(P, "giraffe", T, 7, (n, R) => {
+    const pts = []; for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) pts.push((i + 0.5 + (hash3(i, j, s0) - 0.5) * 0.65) * cell, (j + 0.5 + (hash3(i, j, s0 + 1) - 0.5) * 0.65) * cell);
+    const rough = fbmGrid(n, s0 + 2, { px: 16, py: 16, oct: 2 }), D = new Float32Array(n * n), k = cell * 0.05;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const x = i * T / n, y = j * T / n, ci = Math.floor(x / cell), cj = Math.floor(y / cell), cand = [];   // jitter 0.65 keeps every relevant site in the 3×3 block
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+        const ii = ci + di, jj = cj + dj, w = ((ii % m) + m) % m, h = ((jj % m) + m) % m;
+        cand.push(pts[(h * m + w) * 2] + (ii - w) * cell, pts[(h * m + w) * 2 + 1] + (jj - h) * cell);
+      }
+      let best = 0, bd = Infinity;
+      for (let q = 0; q < cand.length; q += 2) { const d = (cand[q] - x) ** 2 + (cand[q + 1] - y) ** 2; if (d < bd) { bd = d; best = q; } }
+      const px = cand[best], py = cand[best + 1];
+      let sm = 0;
+      for (let q = 0; q < cand.length; q += 2) {
+        if (q === best) continue;
+        const nx = cand[q] - px, ny = cand[q + 1] - py, L = Math.hypot(nx, ny);
+        const dist = -((x - (px + cand[q]) / 2) * nx + (y - (py + cand[q + 1]) / 2) * ny) / L;   // >0 inside
+        if (dist < k * 12) sm += Math.exp(-dist / k);
+      }
+      D[j * n + i] = -k * Math.log(sm) + rough[j * n + i] * cell * 0.05;   // soft distance to the patch edge, px
+    }
+    const gap = cell * 0.06;
+    return { fields: [D], layers: [{ f: 0, th: gap, ink: R.a }, { f: 0, th: gap + cell * 0.12, ink: R.A }] };
+  });
+  fillTile(P, c);
+}
+/* Spot prints: the motif geometry depends only on the seed, so it is built once in a 1000-unit tile,
+   kept (as Path2Ds) per seed, and scaled into each tile.  build(T) -> [[role, Path2D | null (whole tile)], ...] */
+const motifCache = new Map();
+function spotsTile(P, name, T, build) {
+  const key = name + "|" + P.seed;
+  let layers = motifCache.get(key);
+  if (!layers) { layers = build(1000); motifCache.set(key, layers); if (motifCache.size > 24) motifCache.delete(motifCache.keys().next().value); }
+  const c = tile(P, name, T, T, (g, tw) => {
+    const R = inks(P); g.scale(tw / 10000, tw / 10000);   // motif units are tenths (PathStr)
+    for (const [role, path] of layers) {
+      if (path) inkFill(g, R[role], path);
+      else { g.fillStyle = rgba(R[role], R[role][3]); g.fillRect(0, 0, 10000, 10000); }
+    }
+  });
+  fillTile(P, c);
+}
+function leopard(P) {
+  const s0 = seedOf(P), T = Math.round(P.s * 0.57), m = 5;
+  spotsTile(P, "leopard", T, (T) => {
+    const ring = new PathStr(), mid = new PathStr(), dots = new PathStr(), cell = T / m;
+    const pts = jitter(m, T, s0, 0.7);
+    for (let i = 0; i < pts.length; i += 4) {
+      const rf = mulberry32(s0 + i * 7), x = pts[i], y = pts[i + 1], r = cell * (0.3 + pts[i + 2] * 0.1), ex = 0.85 + rf() * 0.35, rot = rf() * TAU;
+      const pc = blobPts(rf, r * 0.9, 7, 0.25, ex, 1 / ex, rot);
+      const segs = 3 + ((rf() * 3) | 0), a0 = rf() * TAU, segPts = [];
+      for (let sgi = 0; sgi < segs; sgi++) {
+        const aa = a0 + sgi * TAU / segs + (rf() - 0.5) * 0.25, span = TAU / segs * (0.68 + rf() * 0.2), th = r * (0.34 + rf() * 0.18), q = [], N = 6;
+        for (let t = 0; t <= N; t++) { const u = t / N, a = aa + span * u, w = th * Math.pow(Math.sin(Math.PI * u), 0.55) + th * 0.12, rr = r * (1 + (rf() - 0.5) * 0.08); q.push(a, rr + w * 0.6, rr - w * 0.6); }
+        segPts.push(q);
+      }
+      const cr = Math.cos(rot), sr = Math.sin(rot), polys = segPts.map(q => {
+        const out = [], at = (a, rr) => { const u = Math.cos(a) * rr * ex, v = Math.sin(a) * rr / ex; out.push(u * cr - v * sr, u * sr + v * cr); };
+        for (let t = 0; t < q.length; t += 3) at(q[t], q[t + 1]);
+        for (let t = q.length - 3; t >= 0; t -= 3) at(q[t], q[t + 2]);
+        return out;
+      });
+      wrapAt(T, x, y, r * 1.5, (dx, dy) => {
+        smoothPath(mid, pc, x + dx, y + dy);
+        for (const o of polys) smoothPath(ring, o, x + dx, y + dy);
+      });
+    }
+    const sp = jitter(m, T, s0 + 99, 0.6);   // small solid spots in between the rosettes
+    for (let i = 0; i < sp.length; i += 4) {
+      if (sp[i + 2] > 0.6) continue;
+      const rf = mulberry32(s0 + 5000 + i), x = sp[i] + cell / 2, y = sp[i + 1] + cell / 2, r = cell * (0.06 + rf() * 0.06), pd = blobPts(rf, r, 6, 0.4, 1.2, 0.85, rf() * TAU);
+      wrapAt(T, x, y, r * 1.5, (dx, dy) => smoothPath(dots, pd, x + dx, y + dy));
+    }
+    return [["T", null], ["e", mid.done()], ["D", ring.done()], ["D", dots.done()]];
+  });
+}
+function cheetah(P) {
+  const s0 = seedOf(P), T = Math.round(P.s * 0.6), m = 12;
+  spotsTile(P, "cheetah", T, (T) => {
+    const dots = new PathStr(), cell = T / m, pts = jitter(m, T, s0, 0.75);
+    for (let i = 0; i < pts.length; i += 4) {
+      const rf = mulberry32(s0 + i * 3), x = pts[i], y = pts[i + 1], r = cell * (0.17 + pts[i + 2] * 0.1), pd = blobPts(rf, r, 7, 0.28, 1.1, 0.9, rf() * TAU);
+      wrapAt(T, x, y, r * 1.4, (dx, dy) => smoothPath(dots, pd, x + dx, y + dy));
+    }
+    return [["T", null], ["D", dots.done()]];
+  });
+}
+function dalmatian(P) {
+  const s0 = seedOf(P), T = Math.round(P.s * 0.7), m = 7;
+  spotsTile(P, "dalmatian", T, (T) => {
+    const dots = new PathStr(), cell = T / m, pts = jitter(m, T, s0, 0.95);
+    for (let i = 0; i < pts.length; i += 4) {
+      if (pts[i + 3] < 0.12) continue;
+      const rf = mulberry32(s0 + i * 5), x = pts[i], y = pts[i + 1], u = pts[i + 2], r = cell * (0.08 + u * u * 0.22), pd = blobPts(rf, r, 8, 0.35, 1 + rf() * 0.3, 1, rf() * TAU);
+      wrapAt(T, x, y, r * 1.5, (dx, dy) => smoothPath(dots, pd, x + dx, y + dy));
+      if (rf() < 0.35) { const a = rf() * TAU, r2 = r * (0.35 + rf() * 0.3), x2 = x + Math.cos(a) * (r + r2) * 0.95, y2 = y + Math.sin(a) * (r + r2) * 0.95, p2 = blobPts(rf, r2, 7, 0.35); wrapAt(T, x2, y2, r2 * 1.5, (dx, dy) => smoothPath(dots, p2, x2 + dx, y2 + dy)); }
+    }
+    return [["A", dots.done()]];
+  });
+}
+function cowhide(P) {
+  const s0 = seedOf(P), T = P.s * 0.9;
+  const c = fieldTile(P, "cow", T, 10, (n, R) => ({
+    fields: [fbmGrid(n, s0, { px: 3, py: 3, oct: 5, gain: 0.5, warp: 0.12 })],
+    layers: [{ f: 0, th: 0.12, ink: R.A }],
+  }));
+  fillTile(P, c);
+}
+function snakeskin(P) {
+  const s0 = seedOf(P), cw = Math.max(6, Math.round(P.s * 0.034)), mx = clamp(Math.round(P.s * 0.6 / cw), 6, 48), T = mx * cw;
+  const my = Math.max(2, Math.round(T / (cw * 0.5) / 2) * 2), rh = T / my;
+  const c = tile(P, "snake", T, T, (g) => {
+    const R = inks(P), nz = pnoise(s0), lw = Math.max(1, cw * 0.075);
+    // opaque tints (ink pre-mixed over the ground) so overlapping rows simply paint over each other
+    const solid = (r) => r[4] ? rgba(P.bg) : rgba([P.bg[0] + (r[0] - P.bg[0]) * r[3], P.bg[1] + (r[1] - P.bg[1]) * r[3], P.bg[2] + (r[2] - P.bg[2]) * r[3]]);
+    const bins = [R.h, R.a, R.A, R.l].map(solid), edge = solid(R.D[4] ? R.K : [R.D[0], R.D[1], R.D[2], 0.55]);
+    const field = (x, y) => nz(x / T * 3, y / T * 3, 3, 3) * 0.75 + nz(x / T * 6 + 9, y / T * 6, 6, 6) * 0.25;
+    const hw = cw * 0.56, top = rh * 1.1, bot = rh * 1.25;
+    // shield-shaped scales, pointed at the head end; each row laps over the one above, outlined in the ground
+    const shape = (p, x, y) => { p.moveTo(x, y - top); p.quadraticCurveTo(x + hw * 0.7, y - top * 0.55, x + hw, y); p.bezierCurveTo(x + hw, y + bot * 0.7, x - hw, y + bot * 0.7, x - hw, y); p.quadraticCurveTo(x - hw * 0.7, y - top * 0.55, x, y - top); p.closePath(); };
+    g.lineWidth = lw; g.lineJoin = "round";
+    for (let j = -2; j <= my + 2; j++) {
+      const all = new Path2D(), paths = bins.map(() => new Path2D());
+      for (let i = -1; i <= mx; i++) {
+        const x = (i + ((j & 1) ? 0.5 : 0)) * cw, y = j * rh, xm = ((x % T) + T) % T, ym = ((y % T) + T) % T;
+        const jj = ((j % my) + my) % my, ii = ((Math.round(x / cw - ((j & 1) ? 0.5 : 0)) % mx) + mx) % mx;
+        const v = field(xm, ym) + (hash3(ii, jj, s0) - 0.5) * 0.1;
+        const b = v > 0.2 ? 2 : v > 0.1 ? 3 : v > -0.1 ? 1 : 0;
+        shape(all, x, y); shape(paths[b], x, y);
+      }
+      bins.forEach((c, k) => { g.fillStyle = c; g.fill(paths[k]); });
+      g.strokeStyle = edge; g.stroke(all);
+    }
+  });
+  fillTile(P, c);
+}
+
+/* ======================================================================
    registry
    ====================================================================== */
 const DEFS = [
-  ["tartan", "Tartan", "fabric", 0.6, tartan],
   ["gingham", "Gingham", "fabric", 0.5, gingham],
   ["houndstooth", "Houndstooth", "fabric", 0.75, houndstooth],
   ["herringbone", "Herringbone", "fabric", 0.45, herringbone],
@@ -825,6 +1356,34 @@ const DEFS = [
   ["spiderweb", "Spiderweb", "organic", 0.3, spiderweb],
   ["snowflakes", "Snowflakes", "organic", 0.35, snowflakes],
   ["topo", "Contours", "organic", 0.35, topo],
+  ["tartan", "Tartan", "plaid", 0.6, tartan],
+  ["buffalo", "Buffalo check", "plaid", 0.8, plaid("buffalo")],
+  ["blackwatch", "Black Watch", "plaid", 0.7, plaid("blackwatch")],
+  ["stewart", "Royal Stewart", "plaid", 0.8, plaid("stewart")],
+  ["dressgordon", "Dress Gordon", "plaid", 0.7, plaid("dressgordon")],
+  ["madras", "Madras", "plaid", 0.8, plaid("madras")],
+  ["glencheck", "Glen check", "plaid", 0.7, plaid("glen")],
+  ["windowpane", "Windowpane", "plaid", 0.3, plaid("windowpane")],
+  ["tattersall", "Tattersall", "plaid", 0.35, plaid("tattersall")],
+  ["flannel", "Flannel", "plaid", 0.75, plaid("flannel")],
+  ["heritage", "Heritage check", "plaid", 0.55, plaid("heritage")],
+  ["shepherd", "Shepherd's check", "plaid", 0.75, plaid("shepherd")],
+  ["woodland", "Woodland camo", "camo", 0.75, camoWoodland],
+  ["desertcamo", "Desert camo", "camo", 0.55, camoDesert],
+  ["digicamo", "Digital camo", "camo", 0.75, camoDigital],
+  ["tigercamo", "Tiger stripe camo", "camo", 0.7, camoTiger],
+  ["splinter", "Splinter camo", "camo", 0.75, camoSplinter],
+  ["urbancamo", "Urban camo", "camo", 0.7, camoUrban],
+  ["multicam", "Multi-terrain camo", "camo", 0.6, camoMulti],
+  ["zebra", "Zebra", "animal", 0.85, zebra],
+  ["giraffe", "Giraffe", "animal", 0.7, giraffe],
+  ["leopard", "Leopard", "animal", 0.65, leopard],
+  ["cheetah", "Cheetah", "animal", 0.55, cheetah],
+  ["tabby", "Tabby", "animal", 0.6, tabby],
+  ["tiger", "Tiger", "animal", 0.7, tiger],
+  ["snakeskin", "Snakeskin", "animal", 0.65, snakeskin],
+  ["cowhide", "Cowhide", "animal", 0.55, cowhide],
+  ["dalmatian", "Dalmatian", "animal", 0.4, dalmatian],
 ];
 const BY_ID = {}; const LIST = [];
 for (const [id, name, family, busy, fn] of DEFS) { BY_ID[id] = fn; LIST.push({ id, name, family, busy }); }
@@ -863,5 +1422,5 @@ function draw(ctx, W, H, id, o = {}) {
   ctx.save(); ctx.globalAlpha = alpha; ctx.drawImage(layer, 0, 0, W, H); ctx.restore();
 }
 
-window.Patterns = { LIST, draw, FAMILIES: ["fabric", "check", "dots", "lines", "rays", "tile", "organic"], clearCache() { layerCache.clear(); tileCache.clear(); } };
+window.Patterns = { LIST, draw, FAMILIES: ["fabric", "plaid", "check", "dots", "lines", "rays", "tile", "organic", "camo", "animal"], clearCache() { layerCache.clear(); tileCache.clear(); motifCache.clear(); } };
 })();
