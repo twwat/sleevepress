@@ -11,8 +11,8 @@ const SCHEMA = "sleevepress.release/1";
 /* The words a new release starts with. Built-ins below; the user's own (Settings → Defaults) win. */
 const DEFAULTS_KEY = "sleevepress.defaults";
 const BUILTIN_WORDS = {
-  artist: "TW@T", title: "SLEEVE\nPRESS", catalog: "SLEEVE-001", year: "2026",
-  footer: "SLEEVE-001 · 2026", format: "EP", label: "DUPPY WIRE SOUND",
+  artist: "NIGHT SHIFT", title: "SLEEVE\nPRESS", catalog: "HPR-001", year: "2026",
+  footer: "HPR-001 · 2026", format: "EP", label: "HOUSE PRESS RECORDS",
   date: "", cta: "OUT NOW", links: "Spotify · Apple Music · Bandcamp",
 };
 const WORD_KEYS = Object.keys(BUILTIN_WORDS);
@@ -23,7 +23,7 @@ function setDefaultWords(o) { const keep = {}; for (const k of WORD_KEYS) if (ty
 const DEFAULT = () => ({
   schema: SCHEMA,
   release: defaultWords(),
-  palette: { bg: "#15120f", ink: "#ece6da", accent: "#9b1b1e", name: "Nine Night", swatches: [], words: "" },
+  palette: { bg: "#15120f", ink: "#ece6da", accent: "#9b1b1e", name: "House", swatches: [], words: "" },
   tracks: [],      // [{ title, feat, bpm, key, length, side }]
   sleeve: {},      // Sleeve Press settings beyond the shared fields (merged over its own defaults)
   typeset: {},     // Tracklist settings
