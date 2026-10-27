@@ -68,9 +68,9 @@ async function bareBack(e, size) {
 
 /* ---------- print pieces (sizes in mm, drawn at px per mm) ---------- */
 const PRINT = {
-  booklet: { w: 120, h: 120, label: "CD booklet front" },
-  booklet2: { w: 240, h: 120, label: "CD booklet, folded", folds: [[120, 0, 120, 120]] },
-  inlay: { w: 151, h: 118, label: "CD tray inlay", folds: [[6.5, 0, 6.5, 118], [144.5, 0, 144.5, 118]] },
+  booklet: { w: 120, h: 120, label: "CD front insert" },
+  booklet2: { w: 240, h: 120, label: "CD front insert, folded", folds: [[120, 0, 120, 120]] },
+  inlay: { w: 151, h: 118, label: "CD back insert", folds: [[6.5, 0, 6.5, 118], [144.5, 0, 144.5, 118]] },
   wallet: { w: 250, h: 125, label: "Card wallet sleeve", folds: [[125, 0, 125, 125]] },
 };
 async function booklet2(e, ppm, wmm = 120) {

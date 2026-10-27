@@ -12,7 +12,7 @@ const SCHEMA = "sleevepress.release/1";
 const DEFAULTS_KEY = "sleevepress.defaults";
 const BUILTIN_WORDS = {
   artist: "NIGHT SHIFT", title: "SLEEVE\nPRESS", catalog: "HPR-001", year: "2026",
-  footer: "HPR-001 · 2026", format: "EP", label: "HOUSE PRESS RECORDS",
+  footer: "HPR-001 · 2026", format: "", label: "HOUSE PRESS RECORDS",
   date: "", cta: "OUT NOW", links: "Spotify · Apple Music · Bandcamp",
 };
 const WORD_KEYS = Object.keys(BUILTIN_WORDS);

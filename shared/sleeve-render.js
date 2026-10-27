@@ -39,9 +39,9 @@ const SLEEVE_DEFAULTS = {
 };
 /* Option lists for the editor's pickers: [id, name]. */
 const TITLE_STYLES = [["solid", "Solid"], ["outline", "Outline"], ["shadow", "Shadow"], ["echo", "Echo"], ["block", "Block"],
-  ["split", "Split"], ["stencil", "Stencil"], ["stripe", "Stripe"], ["offset", "Offset"], ["knockout", "Knockout"], ["slant", "Slant"], ["fitted", "Fitted"]];
+  ["split", "Split"], ["stencil", "Stencil"], ["stripe", "Stripe"], ["knockout", "Knockout"], ["slant", "Slant"], ["fitted", "Fitted"]];
 const IMG_EFFECTS = [["none", "None"], ["halftone", "Halftone"], ["riso", "Riso"], ["grain", "Grain"], ["photocopy", "Photocopy"], ["dither", "Dither"],
-  ["scanlines", "Scanlines"], ["mosaic", "Mosaic"]];
+  ["scanlines", "Scanlines"]];
 const TITLE_ROTATES = [["none", "Across"], ["up", "Up the left"], ["down", "Down the right"]];
 const RELEASE_KEYS = ["artist", "title", "footer", "catalog", "year", "label"];
 const PALETTE_KEYS = ["bg", "ink", "accent"];
@@ -156,64 +156,62 @@ function toneEnds(st) {
   return { paper, plate, other, cov: light ? (t) => t : (t) => 1 - t };
 }
 function effect(c, g, w, h, st, fx, q) {
-  const M = Math.max(w, h), orig = st.imgTone === "original";
   if (fx === "halftone") return halftone(c, g, w, h, st, q);
-  if (fx === "mosaic") {
-    // pixelate first, then tone: square tiles with a fine ground-coloured grout
-    const cell = Math.max(2, Math.round(M / 46)), tw = Math.ceil(w / cell), th = Math.ceil(h / cell);
-    const t = document.createElement("canvas"); t.width = tw; t.height = th;
-    const tg = t.getContext("2d"); tg.imageSmoothingQuality = "high"; tg.drawImage(c, 0, 0, tw, th);
-    g.imageSmoothingEnabled = false; g.drawImage(t, 0, 0, tw * cell, th * cell); g.imageSmoothingEnabled = true;
-    pixels(g, w, h, st, "plain", q);
-    const E = toneEnds(st), gw = Math.max(1, cell * 0.07);
-    g.fillStyle = rgba(E.paper, orig ? 0.85 : 1);
-    for (let x = cell; x < w; x += cell) g.fillRect(x - gw / 2, 0, gw, h);
-    for (let y = cell; y < h; y += cell) g.fillRect(0, y - gw / 2, w, gw);
-    return;
-  }
   pixels(g, w, h, st, fx, q);
 }
-/* Per-pixel treatments. "original" keeps colour for grain, scanlines, riso and mosaic; the two-colour ones use the ink tone. */
+/* Per-pixel treatments, table-driven so a 1200 px picture stays well under the frame budget.
+   "original" keeps colour for grain, scanlines and riso; photocopy and dither are two-colour, so they use the ink tone. */
 function pixels(g, w, h, st, fx, q) {
   const id = g.getImageData(0, 0, w, h), d = id.data, M = Math.max(w, h);
-  const keep = st.imgTone === "original" && (fx === "grain" || fx === "scanlines" || fx === "riso" || fx === "plain");
+  const keep = st.imgTone === "original" && (fx === "grain" || fx === "scanlines" || fx === "riso");
   const E = toneEnds(st.imgTone === "original" ? { ...st, imgTone: "ink" } : st), P = E.paper, Q = E.plate, O = E.other;
-  const NZ = noise(), u = Math.max(1, Math.round(M / 700)), ud = Math.max(1, Math.round(M / 460));
-  const per = Math.max(3, Math.round(M / 210)), dark = Math.round(per * 0.42);
-  const off = Math.max(1, Math.round(M / 240));
-  const norm = (i) => { const t = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255; return q(t < 0.08 ? 0 : t > 0.92 ? 1 : (t - 0.08) / 0.84); };
-  let T = null;
-  if (fx === "riso" && !keep) { T = new Float32Array(w * h); for (let i = 0, j = 0; j < T.length; i += 4, j++) T[j] = norm(i); }
-  const src = fx === "riso" && keep ? new Uint8ClampedArray(d) : null;
-  for (let y = 0; y < h; y++) {
-    const ny = ((y / u) & 255) << 8, line = y % per < dark;
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4, n = NZ[ny | ((x / u) & 255)] / 255 - 0.5;
-      if (keep) {
+  const NZ = noise(), u = Math.max(1, Math.round(M / 700)), ud = Math.max(1, Math.round(M / 170));
+  const per = Math.max(3, Math.round(M / 210)), dark = Math.round(per * 0.42), off = Math.max(1, Math.round(M / 240));
+  // brightness (0..255) → normalised, posterized tone; tone (0..255) → output colour
+  const N = new Float32Array(256), R = new Uint8ClampedArray(256), G = new Uint8ClampedArray(256), B = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) {
+    const t = v / 255; N[v] = q(t < 0.08 ? 0 : t > 0.92 ? 1 : (t - 0.08) / 0.84);
+    const c = E.cov(t); R[v] = P[0] + (Q[0] - P[0]) * c; G[v] = P[1] + (Q[1] - P[1]) * c; B[v] = P[2] + (Q[2] - P[2]) * c;
+  }
+  const cx = new Int32Array(w), cxd = new Int32Array(w); for (let x = 0; x < w; x++) { cx[x] = (x / u) & 255; cxd[x] = (x / ud) & 3; }
+  const L = (i) => (d[i] * 54 + d[i + 1] * 183 + d[i + 2] * 19) >> 8;
+  if (keep) {
+    const src = fx === "riso" ? new Uint8ClampedArray(d) : null;
+    for (let y = 0; y < h; y++) {
+      const ny = ((y / u) & 255) << 8, mul = fx === "scanlines" ? (y % per < dark ? 0.38 : 1.1) : 1, yb = Math.min(h - 1, y + off);
+      for (let x = 0, i = y * w * 4; x < w; x++, i += 4) {
+        const n = NZ[ny | cx[x]] - 128;
         if (fx === "riso") {
-          // the three plates slightly out of register, with a grainy ink lay-down
-          const xr = Math.min(w - 1, x + off), yb = Math.min(h - 1, y + off), g2 = n * 38;
-          d[i] = src[(y * w + xr) * 4] + g2; d[i + 1] = src[i + 1] + g2; d[i + 2] = src[(yb * w + x) * 4 + 2] + g2;
-        } else {
-          const add = fx === "grain" ? n * 70 : 0, mul = fx === "scanlines" ? (line ? 0.38 : 1.1) : 1;
-          for (let k = 0; k < 3; k++) d[i + k] = q((d[i + k] * mul + add) / 255) * 255;
-        }
-        continue;
+          // the plates slightly out of register, with a grainy ink lay-down
+          const g2 = n * 0.3; d[i] = src[(y * w + Math.min(w - 1, x + off)) * 4] + g2; d[i + 1] = src[i + 1] + g2; d[i + 2] = src[(yb * w + x) * 4 + 2] + g2;
+        } else if (fx === "grain") { const a = n * 0.55; d[i] += a; d[i + 1] += a; d[i + 2] += a; }
+        else { d[i] *= mul; d[i + 1] *= mul; d[i + 2] *= mul; }
       }
-      let t = T ? T[y * w + x] : norm(i);
+    }
+    g.putImageData(id, 0, 0); return;
+  }
+  let T = null;
+  if (fx === "riso") { T = new Uint8Array(w * h); for (let i = 0, j = 0; j < T.length; i += 4, j++) T[j] = N[L(i)] * 255; }
+  for (let y = 0; y < h; y++) {
+    const ny = ((y / u) & 255) << 8, line = y % per < dark, yd = ((y / ud) & 3) << 2, ry = Math.max(0, y - off) * w;
+    for (let x = 0, i = y * w * 4; x < w; x++, i += 4) {
+      let t = T ? T[y * w + x] / 255 : N[L(i)];
+      const n = NZ[ny | cx[x]] / 255 - 0.5;
       if (fx === "grain") t += n * 0.36;
       else if (fx === "photocopy") { t += n * 0.16; t = t < 0.44 ? 0 : t > 0.56 ? 1 : (t - 0.44) / 0.12; }
-      else if (fx === "dither") t = t > BAYER[((x / ud) & 3) + (((y / ud) & 3) << 2)] ? 1 : 0;
+      else if (fx === "dither") t = t > BAYER[cxd[x] + yd] ? 1 : 0;
       else if (fx === "scanlines") t = line ? t * 0.3 : t * 1.12;
-      t = t < 0 ? 0 : t > 1 ? 1 : t;
-      let c1 = E.cov(t), c2 = 0;
       if (T) {
-        // riso: the tone colour carries the picture, the other colour sits in the mid-tones, off register, both grainy
-        const m = E.cov(T[Math.max(0, y - off) * w + Math.max(0, x - off)]);
-        c1 = c1 + n * 0.3; c1 = c1 < 0 ? 0 : c1 > 1 ? 1 : c1;
-        c2 = 1 - Math.abs(m - 0.5) * 2.3 + NZ[(ny | ((x / u) & 255)) ^ 0x5A5A] / 255 * 0.5 - 0.25; c2 = c2 < 0 ? 0 : c2 > 1 ? 0.78 : c2 * 0.78;
+        // riso: the tone colour carries the picture (grainy), the other colour sits in the mid-tones, off register
+        t += n * 0.3;
+        let c2 = 1 - Math.abs(E.cov(T[ry + Math.max(0, x - off)] / 255) - 0.5) * 2.3 + (NZ[(ny | cx[x]) ^ 0x5A5A] / 255 - 0.5) * 0.5;
+        c2 = c2 < 0 ? 0 : c2 > 1 ? 0.78 : c2 * 0.78;
+        const k = t < 0 ? 0 : t > 1 ? 255 : (t * 255) | 0, r0 = R[k], g0 = G[k], b0 = B[k];
+        d[i] = r0 + (O[0] - r0) * c2; d[i + 1] = g0 + (O[1] - g0) * c2; d[i + 2] = b0 + (O[2] - b0) * c2;
+        continue;
       }
-      for (let k = 0; k < 3; k++) { const v = P[k] + (Q[k] - P[k]) * c1; d[i + k] = v + (O[k] - v) * c2; }
+      const k = t < 0 ? 0 : t > 1 ? 255 : (t * 255) | 0;
+      d[i] = R[k]; d[i + 1] = G[k]; d[i + 2] = B[k];
     }
   }
   g.putImageData(id, 0, 0);
@@ -252,6 +250,7 @@ function drawCover(ctx, img, x, y, w, h, state, clipPath) {
   ctx.save(); ctx.beginPath();
   if (clipPath) clipPath(ctx); else ctx.rect(x, y, w, h);
   ctx.clip();
+  if (state.imgEffect && state.imgEffect !== "none") ctx.imageSmoothingQuality = "high";   // screens and dither alias when shrunk
   ctx.drawImage(img, dx, dy, dw, dh);
   ctx.restore();
 }
@@ -670,6 +669,142 @@ function drawLabelMark(ctx, S, st, cx, cy, colour, faceName, logo) {
   return box;
 }
 
+/* ---------- title helpers ---------- */
+const capCache = {};
+/* Cap height as a share of the size, measured once the face is loaded. */
+function capRatio(ctx, fontName, face) {
+  if (capCache[fontName]) return capCache[fontName];
+  const f = `${weightFor(fontName, "700")} 100px ${face}`;
+  ctx.save(); ctx.font = f; const a = ctx.measureText("H").actualBoundingBoxAscent; ctx.restore();
+  const r = a ? Math.min(0.9, Math.max(0.5, a / 100)) : 0.72;
+  if (a && document.fonts.check(f)) capCache[fontName] = r;
+  return r;
+}
+/* Baselines of lines that each have their own size, relative to the last line's: each line clears the caps below it. */
+function stackOffsets(lines, sizes, lead, capR, tcase) {
+  const n = sizes.length, o = new Array(n).fill(0);
+  for (let i = n - 2; i >= 0; i--) {
+    const mn = Math.min(sizes[i], sizes[i + 1]), desc = tcase !== "upper" && /[gjpqy,;]/.test(lines[i]) ? sizes[i] * 0.22 : 0;
+    o[i] = o[i + 1] - sizes[i + 1] * capR - Math.max(mn * Math.max(0.07, lead - 0.72), desc + mn * 0.05);
+  }
+  return o;
+}
+/* A title set sideways: fitted to the run between the margins, as thick as its lines. Lines are placed in a frame whose
+   x runs along the strip (start = bottom for "up", top for "down") and whose y runs into the sleeve from the edge. */
+function sideTitle(ctx, st, lines, S, X, face, k) {
+  const trackEm = st.tracking / 100, lead = st.leading / 100, run = S - X * 2, fitted = st.titleStyle === "fitted";
+  const fnt = (z) => `${weightFor(st.font, "700")} ${z}px ${face}`;
+  let size = S * 0.19 * (st.titleSize / 100) * k;
+  ctx.save(); ctx.font = fnt(size);
+  const ems = lines.map(l => measureTracked(ctx, l, trackEm, size) / size), capR = capRatio(ctx, st.font, face);
+  const lowDesc = (i) => st.titleCase !== "upper" && /[gjpqy,;]/.test(lines[i]) ? 0.22 : 0.06;
+  let sizes;
+  if (fitted) sizes = ems.map(e => Math.min(S * 0.42, run * Math.min(1, st.titleSize / 100) / e));
+  else { const wd = Math.max(...ems); if (wd * size > run) size = run / wd; sizes = ems.map(() => size); }
+  const n = lines.length;
+  const layout = () => {
+    const offs = fitted ? stackOffsets(lines, sizes, lead, capR, st.titleCase) : sizes.map((z, i) => -(n - 1 - i) * z * lead);
+    return { offs, thick: -offs[0] + sizes[0] * 0.74 + sizes[n - 1] * lowDesc(n - 1) };
+  };
+  let L = layout();
+  if (L.thick > S * 0.42) { const f = S * 0.42 / L.thick; sizes = sizes.map(z => z * f); size *= f; L = layout(); }
+  if (fitted) size = Math.min(...sizes);
+  const al = st.titleAlign || "left", dx = S * (st.titleX || 0) / 100, y0 = sizes[0] * 0.74 - L.offs[0];
+  const placed = lines.map((l, i) => {
+    const font = fnt(sizes[i]); ctx.font = font;
+    const w = measureTracked(ctx, l, trackEm, sizes[i]), opt = sizes[i] * 0.035;
+    const x = al === "right" ? run - w + opt : al === "centre" ? (run - w) / 2 : -opt;
+    return { l, x, y: y0 + L.offs[i], w, size: sizes[i], font: ctx.font, i };
+  });
+  ctx.restore();
+  const up = st.titleRotate === "up";
+  return { size, placed, thick: L.thick, a: up ? -Math.PI / 2 : Math.PI / 2, tx: up ? X + dx : S - X + dx, ty: up ? S - X : X,
+    edge: up ? X + dx + L.thick : S - X + dx - L.thick, up };
+}
+/* A rectangle in a sideways title's frame, as a sleeve rectangle. */
+function sideRect(side, x, y, w, h) {
+  const pt = (u, v) => side.up ? [side.tx + v, side.ty - u] : [side.tx - v, side.ty + u];
+  const ps = [pt(x, y), pt(x + w, y), pt(x, y + h), pt(x + w, y + h)], xs = ps.map(p => p[0]), ys = ps.map(p => p[1]);
+  const x0 = Math.min(...xs), y0 = Math.min(...ys);
+  return { x: x0, y: y0, w: Math.max(...xs) - x0, h: Math.max(...ys) - y0 };
+}
+/* A scratch layer the size of the target with the same transform, for treatments that cut into the letters. */
+let scratch = null;
+function layerFor(ctx) {
+  const c = ctx.canvas;
+  if (!scratch) scratch = document.createElement("canvas");
+  if (scratch.width !== c.width || scratch.height !== c.height) { scratch.width = c.width; scratch.height = c.height; }
+  const g = scratch.getContext("2d");
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1; g.clearRect(0, 0, c.width, c.height);
+  g.setTransform(ctx.getTransform()); g.textBaseline = ctx.textBaseline;
+  return g;
+}
+function stampLayer(ctx, g) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(g.canvas, 0, 0); ctx.restore(); }
+const heightOf = (g, p, lower) => { g.font = p.font; return g.measureText(lower ? "x" : "H").actualBoundingBoxAscent || p.size * (lower ? 0.5 : 0.72); };
+const fillLines = (g, placed, o, col) => placed.forEach(p => { g.font = p.font; g.fillStyle = rgba(col || p.col, 1); drawTracked(g, p.l, p.x, p.y, o.trackEm, p.size); });
+/* The newer title treatments. Each returns { paint, box?, grow? }: box replaces the measured plate, grow widens it. */
+const TITLE_FX = {
+  // top half one colour, bottom half the other, meeting on a clean line through the middle of the letters
+  split(ctx, placed, o) {
+    const lower = o.st.titleCase === "lower";
+    return { paint() {
+      placed.forEach(p => {
+        const cut = p.y - heightOf(ctx, p, lower) * 0.5, big = p.size * 2, other = p.col === o.spot ? o.ink : o.spot;
+        ctx.save(); ctx.beginPath(); ctx.rect(p.x - big, cut - big * 2, p.w + big * 2, big * 2); ctx.clip();
+        ctx.fillStyle = rgba(p.col, 1); drawTracked(ctx, p.l, p.x, p.y, o.trackEm, p.size); ctx.restore();
+        ctx.save(); ctx.beginPath(); ctx.rect(p.x - big, cut, p.w + big * 2, big); ctx.clip();
+        ctx.fillStyle = rgba(other, 1); drawTracked(ctx, p.l, p.x, p.y, o.trackEm, p.size); ctx.restore();
+      });
+    } };
+  },
+  // a bridge cut clean through every letter, like a stencil plate
+  stencil(ctx, placed, o) {
+    const lower = o.st.titleCase === "lower";
+    return { paint() {
+      const g = layerFor(ctx); fillLines(g, placed, o);
+      g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
+      placed.forEach(p => { const h = heightOf(g, p, lower), t = Math.max(1.2, p.size * 0.055); g.fillRect(p.x - p.size, p.y - h * 0.52 - t / 2, p.w + p.size * 2, t); });
+      stampLayer(ctx, g);
+    } };
+  },
+  // letters made of horizontal lines, solid at the baseline and the cap line
+  stripe(ctx, placed, o) {
+    const lower = o.st.titleCase === "lower";
+    return { paint() {
+      const g = layerFor(ctx); fillLines(g, placed, o);
+      g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
+      placed.forEach(p => {
+        const h = heightOf(g, p, lower), n = Math.max(3, Math.round(h / (p.size * 0.11))), pitch = h / (n - 0.4), gap = pitch * 0.4;
+        for (let j = -5; j < n + 6; j++) g.fillRect(p.x - p.size, p.y - (j + 1) * pitch, p.w + p.size * 2, gap);
+      });
+      stampLayer(ctx, g);
+    } };
+  },
+  // letters cut out of one solid slab, so the ground or the picture shows through them
+  knockout(ctx, placed, o) {
+    const pad = o.size * 0.17, col = o.st.titleColor === "accent" ? o.spot : o.ink;
+    let left = Infinity, right = -Infinity, top = Infinity;
+    placed.forEach(p => { left = Math.min(left, p.x); right = Math.max(right, p.x + p.w); top = Math.min(top, p.y - heightOf(ctx, p, false)); });
+    const box = { left: left - pad, right: right + pad, top: top - pad, bot: placed[placed.length - 1].y + pad };
+    ctx.font = placed[placed.length - 1].font;
+    return { box, paint() {
+      const g = layerFor(ctx); g.fillStyle = rgba(col, 1); g.fillRect(box.left, box.top, box.right - box.left, box.bot - box.top);
+      g.globalCompositeOperation = "destination-out"; fillLines(g, placed, o, [0, 0, 0]);
+      stampLayer(ctx, g);
+    } };
+  },
+  // sheared to an italic from the baseline
+  slant(ctx, placed, o) {
+    const sh = 0.21;
+    return { grow: { l: 0, r: sh * o.size * 0.76, b: 0 }, paint() {
+      placed.forEach(p => {
+        ctx.save(); ctx.translate(p.x, p.y); ctx.transform(1, 0, -sh, 1, 0, 0);
+        ctx.font = p.font; ctx.fillStyle = rgba(p.col, 1); drawTracked(ctx, p.l, 0, 0, o.trackEm, p.size); ctx.restore();
+      });
+    } };
+  },
+};
+
 /* ---------- the sleeve ---------- */
 async function render(canvas, state, image, logo) {
   const st = state, S = canvas.width;
@@ -789,19 +924,20 @@ async function render(canvas, state, image, logo) {
       if (artistText && !rotated && artistY < bottom) topLimit = Math.max(topLimit, artistY + S * 0.102);
       if (st.motifKind !== "none" && motifTop < bottom) topLimit = Math.max(topLimit, motifTop + motifH + S * 0.054);
       ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
-      const widest = Math.max(...lines.map(l => measureTracked(ctx, l, trackEm, size) / size));
+      const widest = Math.max(...lines.map(l => measureTracked(ctx, l, trackEm, size) / size)), em0 = size;
       // bleed: the widest line overshoots the far edge (both edges when centred) and the sleeve crops it
       const bleed = !!st.titleBleed, reach = alignOf("title") === "centre" ? S : S - X;
       if (bleed) size = reach * Math.max(1.04, 1.14 * st.titleSize / 100) / widest;
       else if (widest * size > maxW) size = maxW / widest;
-      let sizes = null, offs = null;
+      const asked = bleed ? size : em0;   // what titleSize asked for, to report a forced shrink
+      let sizes = null, offs = null, roomF = 1;
       if (fitted) {
         // every line set to the full measure, so short lines grow: a cascading block
         const meas = bleed ? reach * Math.max(1.04, 1.14 * st.titleSize / 100) : maxW * Math.min(1, st.titleSize / 100);
-        sizes = lines.map(l => Math.min(S * 0.42, meas / (measureTracked(ctx, l, trackEm, size) / size)));
+        sizes = lines.map(l => Math.min(S * 0.42, meas / (measureTracked(ctx, l, trackEm, em0) / em0)));
         const fit = () => { offs = stackOffsets(lines, sizes, lead, capRatio(ctx, st.font, face), st.titleCase); return -offs[0] + sizes[0] * 0.72; };
         let bh = fit();
-        if (bottom - bh < topLimit) { const f = Math.max(0.3, (bottom - topLimit) / bh); sizes = sizes.map(z => z * f); bh = fit(); }
+        if (bottom - bh < topLimit) { const f = Math.max(0.3, (bottom - topLimit) / bh); sizes = sizes.map(z => z * f); bh = fit(); roomF = f; }
       } else {
         let blockH = size * lead * (lines.length - 1) + size * 0.72;
         if (bleed && blockH > S * 0.8) { size *= S * 0.8 / blockH; blockH = size * lead * (lines.length - 1) + size * 0.72; }
@@ -818,6 +954,15 @@ async function render(canvas, state, image, logo) {
         return { l, x, y, w, col: st.titleAccent && i === lines.length - 1 ? spot : main, size: sz, font, i };
       });
       if (sizes) { size = Math.min(...sizes); ctx.font = placed[placed.length - 1].font; }
+      const th = size * lead * (lines.length - 1) + size * 0.74;
+      boxes.title = { x: bx0, y: bottom - th, w: bx1 - bx0, h: th + size * 0.06 };
+      // Title held back by the width or the room above it: larger sizes change nothing (the editor can say so).
+      const gotF = sizes ? roomF : size / asked;
+      if (gotF < 0.995) { boxes.titleShrunk = true; boxes.titleMaxSize = Math.floor((sizes ? Math.min(100, st.titleSize) : st.titleSize) * gotF); }
+      if (sizes || bleed) {
+        const top = Math.min(...placed.map(p => p.y - p.size * 0.74)), x0 = Math.max(0, bx0), x1 = Math.min(S, bx1);
+        boxes.title = { x: x0, y: top, w: x1 - x0, h: bottom + size * 0.06 - top };
+      }
     }
     const lw = Math.max(1, size * 0.028);
     const fx = TITLE_FX[style] ? TITLE_FX[style](ctx, placed, { size, trackEm, ink, spot, bg, st, face }) : null;
@@ -855,18 +1000,16 @@ async function render(canvas, state, image, logo) {
       if (style === "shadow") placed.forEach(p => { ctx.fillStyle = rgba(st.titleColor === "accent" ? ink : spot, 1); drawTracked(ctx, p.l, p.x + size * 0.045, p.y + size * 0.045, trackEm, size); });
       placed.forEach(p => {
         if (fitted && ctx.font !== p.font) ctx.font = p.font;
-        if (style === "outline") { ctx.strokeStyle = rgba(p.col, 1); ctx.lineWidth = lw; ctx.lineJoin = "round"; drawTracked(ctx, p.l, p.x, p.y, trackEm, p.size); }
+        if (style === "outline") { ctx.strokeStyle = rgba(p.col, 1); ctx.lineWidth = lw; ctx.lineJoin = "round"; drawTracked(ctx, p.l, p.x, p.y, trackEm, p.size, true); }
         else { ctx.fillStyle = rgba(p.col, 1); drawTracked(ctx, p.l, p.x, p.y, trackEm, p.size); }
       });
     }
     if (side) {
       ctx.restore();
-      const b = sideRect(side, bx0, -size * 0.74, bx1 - bx0, side.thick);
+      const asked = S * 0.19 * (st.titleSize / 100) * k;
+      if (!fitted && size < asked * 0.995) { boxes.titleShrunk = true; boxes.titleMaxSize = Math.floor(st.titleSize * size / asked); }
+      const b = sideRect(side, bx0, 0, bx1 - bx0, side.thick);
       boxes.title = { x: Math.max(0, b.x), y: Math.max(0, b.y), w: Math.min(S, b.x + b.w) - Math.max(0, b.x), h: Math.min(S, b.y + b.h) - Math.max(0, b.y) };
-    } else {
-      const top = Math.min(...placed.map(p => p.y - p.size * 0.74)), bot = placed[placed.length - 1].y + size * 0.06;
-      const x0 = Math.max(0, bx0), x1 = Math.min(S, bx1);
-      boxes.title = { x: x0, y: top, w: x1 - x0, h: bot - top };
     }
   }
 
@@ -923,7 +1066,7 @@ function filename(state, size, tag) {
 }
 
 window.SleeveRender = {
-  SLEEVE_DEFAULTS, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
+  SLEEVE_DEFAULTS, TITLE_STYLES, IMG_EFFECTS, TITLE_ROTATES, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
   loadFont, loadFonts, weightFor, faceStack, fontInfo, drawTracked, measureTracked, applyCase, drawBarcode, barcodeWidth, barcodeReversed, eanDigits,
   applyGrain, applyVignette, drawBackdrop, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth, drawShape, drawPattern, patternClip, BUILTIN_MARKS,
 };

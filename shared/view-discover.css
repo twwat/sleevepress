@@ -65,10 +65,16 @@
 .view-discover .dc-card:hover :is(.dc-seed, .dc-heart, .dc-bar),
 .view-discover .dc-card:focus-within :is(.dc-seed, .dc-heart, .dc-bar) { opacity: 1; transform: none; }
 .view-discover .dc-card:hover { border-color: var(--rule-strong); }
+/* touch: the buttons sit under the picture, not over it */
 @media (hover: none) {
-  .view-discover .dc-seed, .view-discover .dc-heart, .view-discover .dc-bar { opacity: 1; transform: none; }
-  .view-discover .dc-bar { padding-top: 18px; }
+  .view-discover .dc-heart { opacity: 1; }
+  .view-discover .dc-bar { position: static; opacity: 1; transform: none; background: none; padding: 6px; }
 }
+/* the seed number means nothing to people */
+.view-discover .dc-seed { display: none; }
+/* words or picture changed: old tiles fade and shimmer until they redraw, so stale words never pass for new ones */
+.view-discover .dc-card.stale .dc-pic { background: linear-gradient(110deg, #1a1813 30%, #24211b 50%, #1a1813 70%) 0 0 / 300% 100%; animation: dc-shim 1.4s linear infinite; }
+.view-discover .dc-card.stale .dc-pic img { opacity: .12; }
 @media (max-width: 520px) {
   .view-discover .dc-filters { padding: 6px 0 6px 10px; gap: 4px; }
   .view-discover .dc-row { grid-template-columns: 50px minmax(0, 1fr); gap: 6px; }

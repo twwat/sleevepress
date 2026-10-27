@@ -49,7 +49,7 @@ function applyLook(look, opts = {}) {
 
 /* ---------- flagged looks ---------- */
 /* Keys added after looks were first flagged: left out of the id while unused, so older flags keep their ids. */
-const LATER_KEYS = new Set(["plates", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale", "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed"]);
+const LATER_KEYS = new Set(["imgEffect", "titleBleed", "titleRotate", "plates", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale", "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed"]);
 function lookId(look) {
   const D = SR.SLEEVE_DEFAULTS, noPattern = !look.pattern || look.pattern === "none";
   const keys = SR.LOOK_KEYS.filter(k => !LATER_KEYS.has(k) || !(look[k] === undefined || look[k] === D[k] || (noPattern && k.startsWith("pattern"))));
@@ -169,24 +169,36 @@ function menu(button, items) {
 /* ---------- "is this release saved in the library?" ---------- */
 const sigOf = (rec) => { const r = SP.clone(rec); delete r.looks; delete r.libId; delete r.saved; delete r.exported; return JSON.stringify(r); };
 let savedSig = null;
-function markSaved() { savedSig = sigOf(SP.get()); }
+const statusFns = new Set();
+function markSaved() { savedSig = sigOf(SP.get()); statusFns.forEach(fn => fn()); }
 /* True when the current release has words or settings that aren't in the library. */
 function unsaved() { return savedSig !== sigOf(SP.get()); }
 
 /* ---------- the words form (first run, New release, Defaults) ---------- */
+/* values pre-fill the fields; empty fields show an example in grey. */
 function wordsForm(values, opts = {}) {
   const f = {}, field = (k, label, o = {}) => {
-    const inp = o.area ? h("textarea", { rows: 2, class: "up", spellcheck: "false" }) : h("input", { type: "text", placeholder: o.ph || "", spellcheck: "false" });
+    const inp = o.area ? h("textarea", { rows: 2, class: "up", spellcheck: "false", placeholder: o.ph || "" }) : h("input", { type: "text", placeholder: o.ph || "", spellcheck: "false" });
     inp.value = values[k] || ""; f[k] = inp;
     return h("label", { class: "f" + (o.half ? " half" : "") }, h("span", {}, label), inp);
   };
   const el = h("div", { class: "wordsform" },
-    h("div", { class: "row" }, field("artist", "Artist"), field("label", "Record label", { ph: "optional" })),
-    field("title", "Title (one line per row)", { area: true }),
-    h("div", { class: "row" }, field("catalog", "Catalogue no.", { ph: "e.g. ABC-001" }), field("year", "Year", { ph: "2026" })),
-    opts.footer !== false ? field("footer", "Footer line", { ph: "small print along the bottom" }) : null);
-  return { el, values: () => Object.fromEntries(Object.entries(f).map(([k, i]) => [k, i.value])) };
+    h("div", { class: "row" }, field("artist", "Artist", { ph: "e.g. Night Shift" }), field("label", "Record label", { ph: "optional, e.g. House Press" })),
+    field("title", "Title (one line per row)", { area: true, ph: "e.g. SLEEVE\nPRESS" }),
+    h("div", { class: "row" }, field("catalog", "Catalogue no.", { ph: "made from the label if blank" }), field("year", "Year", { ph: String(new Date().getFullYear()) })),
+    opts.footer !== false ? field("footer", "Footer line", { ph: "small print along the bottom (optional)" }) : null);
+  return { el, f, values: () => Object.fromEntries(Object.entries(f).map(([k, i]) => [k, i.value.trim() ? i.value : ""])) };
 }
+/* Fills the gaps a person leaves: catalogue from the label's initials, this year, a footer from both. */
+function completeWords(v) {
+  const o = { ...v };
+  if (!o.year) o.year = String(new Date().getFullYear());
+  if (!o.catalog) { const ini = (o.label || o.artist || "").toUpperCase().replace(/[^A-Z0-9 ]/g, "").split(/\s+/).filter(Boolean).map(w => w[0]).join("").slice(0, 4); o.catalog = (ini || "CAT") + "-001"; }
+  if (!o.footer) o.footer = [o.catalog, o.year].join(" · ");
+  return o;
+}
+/* What the forms start with: only the person's own saved defaults, never the built-in demo words. */
+function ownDefaults() { try { return JSON.parse(localStorage.getItem("sleevepress.defaults") || "{}") || {}; } catch (e) { return {}; } }
 function pictureField() {
   const input = h("input", { type: "file", accept: "image/*", hidden: true });
   const txt = h("span", {}, "Add a picture (optional): drop it here or click");
@@ -198,12 +210,13 @@ function pictureField() {
 /* New release: ask about unsaved work, then a short form, then Discover. */
 async function newRelease() {
   const go2 = () => {
-    const form = wordsForm(SP.defaultWords());
+    const form = wordsForm(ownDefaults());
     const keepLook = h("input", { type: "checkbox", checked: true });
     modal({ title: "New release", wide: true, body: [form.el, h("label", { class: "check" }, keepLook, "Keep the current look (colours, type, layout)"),
-      h("p", { class: "hint" }, "These start out as your defaults. Change the defaults under ⚙ → Defaults for new releases.")],
+      h("p", { class: "hint" }, "To have fields filled in for you every time: ⚙ → Defaults for new releases.")],
       actions: [{ label: "Cancel" }, { label: "Start", primary: true, onclick: async () => {
-        await SP.reset(form.values(), { freshLook: !keepLook.checked }); clearHistory(); markSaved();
+        const v = form.values(); if (!v.artist.trim() && !v.title.trim()) { SP.toast("Type an artist or a title first"); return false; }
+        await SP.reset({ ...completeWords(v), artist: v.artist, title: v.title }, { freshLook: !keepLook.checked }); clearHistory(); markSaved();
         go("discover"); SP.toast("New release started. Pick a design you like, or open Design.");
       } }] });
   };
@@ -223,10 +236,11 @@ async function openSaved(id) {
     actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: doOpen }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); await doOpen(); } }] });
 }
 function editDefaults() {
-  const form = wordsForm(SP.defaultWords());
-  modal({ title: "Defaults for new releases", wide: true, body: [h("p", { class: "hint" }, "Every new release starts with these words. Kept in this browser."), form.el],
-    actions: [{ label: "Cancel" }, { label: "Use this release's words", onclick: () => { SP.setDefaultWords(SP.get().release) ? SP.toast("Defaults set from this release") : SP.toast("This browser won't store settings"); } },
-      { label: "Save defaults", primary: true, onclick: () => { SP.setDefaultWords(form.values()) ? SP.toast("Defaults saved") : SP.toast("This browser won't store settings"); } }] });
+  const form = wordsForm(ownDefaults());
+  modal({ title: "Defaults for new releases", wide: true, body: [h("p", { class: "hint" }, "New releases start with these filled in. Leave a field empty to type it each time. Kept in this browser."), form.el],
+    actions: [{ label: "Cancel" },
+      { label: "Copy from this release", onclick: () => { const r = SP.get().release; for (const k of ["artist", "label", "catalog", "year", "footer"]) form.f[k].value = r[k] || ""; SP.toast("Copied. Check them, then Save defaults"); return false; } },
+      { label: "Save defaults", primary: true, onclick: () => { try { localStorage.setItem("sleevepress.defaults", JSON.stringify(form.values())); SP.toast("Defaults saved"); } catch (e) { SP.toast("This browser won't store settings"); } } }] });
 }
 function resetEverything() {
   modal({ title: "Reset everything?", body: [h("p", {}, "This deletes everything Sleeve Press keeps in this browser: the release you're on, your saved releases, flagged looks, logo and defaults. The page then reloads like a first visit."),
@@ -238,7 +252,7 @@ function resetEverything() {
 function welcome() {
   let welcomed = false; try { welcomed = !!localStorage.getItem("sleevepress.welcomed"); } catch (e) {}
   if (!SP.isFresh() || welcomed) return;
-  const form = wordsForm({ ...SP.defaultWords(), artist: "", title: "" }, { footer: false });
+  const form = wordsForm(ownDefaults(), { footer: false });
   const asDefault = h("input", { type: "checkbox" });
   const done = () => { try { localStorage.setItem("sleevepress.welcomed", "1"); } catch (e) {} };
   modal({ title: "Start a release", wide: true, body: [
@@ -247,10 +261,9 @@ function welcome() {
     actions: [{ label: "Just show me an example", onclick: done },
       { label: "Show me designs", primary: true, onclick: async () => {
         const v = form.values(); if (!v.artist.trim() && !v.title.trim()) { SP.toast("Type an artist or a title first"); return false; }
-        const w = { ...SP.defaultWords(), ...Object.fromEntries(Object.entries(v).filter(([, x]) => x.trim())) };
-        w.footer = [w.catalog, w.year].filter(x => x && x.trim()).join(" · ");
+        const w = completeWords(v);
         SP.replace({ ...SP.get(), release: { ...SP.get().release, ...w } }); clearHistory();
-        if (asDefault.checked) SP.setDefaultWords(w);
+        if (asDefault.checked) { const { title, ...rest } = w; try { localStorage.setItem("sleevepress.defaults", JSON.stringify(rest)); } catch (e) {} }
         done(); go("discover");
       } }] });
 }
@@ -294,12 +307,15 @@ function mountBar() {
   SP.on(refresh); refresh();
   chip.addEventListener("click", () => { go("design"); setTimeout(() => window.Design && Design.words && Design.words(), 30); });
   const st = $("status");
-  const showStatus = (s) => {
-    st.className = "status " + s;
-    st.textContent = s === "browser" ? "Autosaved" : "Not saving";
-    st.title = s === "browser" ? "Your work is kept in this browser as you go. Save puts a copy in your library." : "This browser won't keep data for this page (private window or file:// restrictions). Use ⚙ → Back up everything to keep your work.";
+  // one plain sentence: is the work kept, and is it in the library
+  const showStatus = () => {
+    const mem = SP.status() !== "browser", lib = !unsaved();
+    st.className = "status " + (mem ? "memory" : lib ? "browser" : "pending");
+    st.textContent = mem ? "Not being kept" : lib ? "Saved in library" : "Not in library yet";
+    st.title = mem ? "This browser won't keep data for this page (private window or file:// restrictions). Use ⚙ → Back up everything to keep your work."
+      : lib ? "This release is in your library. Changes are kept in this browser as you go." : "Your changes are kept in this browser as you go. Press Save to put this release in your library.";
   };
-  SP.onStatus(showStatus); showStatus(SP.status());
+  SP.onStatus(showStatus); SP.on(SP.debounce(showStatus, 300)); statusFns.add(showStatus); showStatus();
   $("saveBtn").addEventListener("click", () => saveToLibrary());
   $("newBtn").addEventListener("click", newRelease);
   menu($("openBtn"), async () => {
@@ -369,7 +385,13 @@ function trackPicture() { const upd = async () => { Looks.picture = !!(await SP.
 function start() {
   trackPicture();
   if (SP.isFresh()) markSaved();   // the example release isn't "unsaved work"
-  SP.library.list().then(async (idx) => { const id = SP.get().libId; if (id && idx.some(e => e.id === id)) { const e = await SP.vault.get("lib." + id); if (e) savedSig = sigOf(e.record); } });
+  // whichever way a saved release gets opened (top bar, Library tab, a restore), compare against what's stored for it
+  let lastLib;
+  const syncSaved = async () => {
+    const id = SP.get().libId; if (id === lastLib) return; lastLib = id; if (!id) return;
+    const e = await SP.vault.get("lib." + id); if (e && SP.get().libId === id) { savedSig = sigOf(e.record); statusFns.forEach(fn => fn()); }
+  };
+  SP.on(syncSaved); syncSaved();
   migrateLooks(); SP.on(() => { if (SP.get().looks.some(l => !l || !l.id)) migrateLooks(); });
   mountBar(); window.addEventListener("hashchange", route); route();
   welcome();

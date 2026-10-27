@@ -35,6 +35,7 @@ const draw = SP.rafOnce(async () => {
   if (gen !== drawGen) return;   // a newer render has started; this one is out of date
   canvas.getContext("2d").drawImage(c, 0, 0);
   boxes = b || {}; positionSel();
+  if (wordsBox) wordsBox._fit(!!boxes.titleShrunk && st.titleSize > (boxes.titleMaxSize || 0) + 2);
   el.querySelector(".dz-file").textContent = SR.filename(st, st.exportSize || "3000");
 });
 
@@ -122,6 +123,13 @@ function drawTitleStyle(x, v, w, hh) {
   SR.render(c, fake, null).then(() => { x.clearRect(0, 0, w, hh); x.drawImage(c, 0, -w * 0.2, w, w); });
 }
 function drawWash(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, pattern: "none", shapeOutline: false, shapeRot: 0, wash: v, washAmt: 90, shape: "none", texture: "none" }, cols().bg, ink, spot); }
+/* A small crop of the real cover with each print effect. */
+function drawEffectMini(x, v, w, hh) {
+  miniGround(x, w, hh); if (!image) return;
+  const c = document.createElement("canvas"); c.width = c.height = 240;
+  SR.render(c, { ...st, imgEffect: v, imgMode: "bleed", title: "", artist: "", footer: "", year: "", motifKind: "none", frame: false, barcode: false, plate: false, labelMark: "none", plates: "none", grain: 0 }, image)
+    .then(() => { x.clearRect(0, 0, w, hh); x.drawImage(c, 40, 40, 160, 160, 0, 0, w, hh); });
+}
 function drawPatternMini(x, v, w, hh) {
   miniGround(x, w, hh); if (v === "none" || !window.Patterns) return; const { bg, ink, spot } = cols();
   try { Patterns.draw(x, w, hh, v, { S: w, scale: 60, angle: 0, fg: ink, fg2: spot, bg, alpha: 0.8, seed: st.patternSeed || 1 }); } catch (e) {}
@@ -188,7 +196,7 @@ function panelFor(t) {
   if (t === "title") {
     P.push(group(null,
       row(seg("titleCase", "Case", [["upper", "AA"], ["title", "Aa"], ["lower", "aa"], ["asis", "As typed"]], { half: true }), colourSeg("titleColor", "Colour", { half: true })),
-      pick("titleStyle", "Style", [["solid", "Solid"], ["outline", "Outline"], ["shadow", "Shadow"], ["echo", "Echo"], ["block", "Block"]], drawTitleStyle, { wide: true }),
+      pick("titleStyle", "Style", SR.TITLE_STYLES || [["solid", "Solid"], ["outline", "Outline"], ["shadow", "Shadow"], ["echo", "Echo"], ["block", "Block"]], drawTitleStyle, { wide: true }),
       check("titleAccent", "Last line in the spot colour"),
     ));
     P.push(group("Type", fontPick("font", "Face"),
@@ -196,6 +204,8 @@ function panelFor(t) {
       range("tracking", "Letter spacing", -8, 30, 1, { reset: -1 })));
     P.push(group("Position", alignSeg("titleAlign"),
       seg("titlePos", "Block", [["upper", "Upper"], ["centre", "Middle"], ["lower", "Lower"]]),
+      ...(SR.TITLE_ROTATES ? [seg("titleRotate", "Direction", SR.TITLE_ROTATES)] : []),
+      check("titleBleed", "Let it run off the edge (huge title, cropped by the sleeve)"),
       row(range("titleDy", "Up / down", -30, 20, 0.5, { unit: "%", half: true, reset: 0 }), range("titleX", "Left / right", -30, 30, 0.5, { unit: "%", half: true, reset: 0 })),
       row(resetPos({ titleDy: 0, titleX: 0, titleAlign: "" })), hint("Or drag the title on the cover.")));
   }
@@ -277,7 +287,7 @@ function panelFor(t) {
 function colourPanel() {
   const out = [];
   const sw = h("div", { class: "dz-swatches" });
-  const roles = [["bg", "Ground"], ["ink", "Ink"], ["accent", "Spot"]];
+  const roles = [["bg", "Background"], ["ink", "Text"], ["accent", "Accent"]];
   const rowsUpd = [];
   for (const [k, name] of roles) {
     const col = h("input", { type: "color", "aria-label": name }), hex = h("input", { type: "text", class: "mono", spellcheck: "false", "aria-label": name + " hex" });
@@ -290,12 +300,12 @@ function colourPanel() {
       col.value = st[k]; if (document.activeElement !== hex) hex.value = st[k];
       if (k === "bg") { ratio.textContent = ""; return; }
       const c = SP.contrast(SP.hexToRgb(st[k]), SP.hexToRgb(st.bg)), good = k === "ink" ? c >= 4.5 : c >= 3;
-      ratio.textContent = `${c.toFixed(1)}:1`; ratio.className = "dz-ratio " + (good ? "ok" : "bad");
-      ratio.title = good ? "Readable on the ground" : "Low contrast against the ground";
+      ratio.textContent = good ? "Easy to read" : "Hard to read"; ratio.className = "dz-ratio " + (good ? "ok" : "bad");
+      ratio.title = `Contrast with the background ${c.toFixed(1)}:1` + (good ? "" : ": try a lighter or darker colour");
     });
   }
   out.push(group(null, reg(sw, null, () => rowsUpd.forEach(f => f())),
-    row(btn("Swap ground ⇄ ink", () => setMany({ bg: st.ink, ink: st.bg }, { paletteName: "Custom" })), btn("Swap ink ⇄ spot", () => setMany({ ink: st.accent, accent: st.ink }, { paletteName: "Custom" })))));
+    row(btn("Swap background ⇄ text", () => setMany({ bg: st.ink, ink: st.bg }, { paletteName: "Custom" })), btn("Swap text ⇄ accent", () => setMany({ ink: st.accent, accent: st.ink }, { paletteName: "Custom" })))));
 
   // roll by mood
   const rolls = h("div", { class: "chips" });
@@ -313,10 +323,10 @@ function colourPanel() {
     const swatches = extract(image, 6), sugg = suggestions(swatches);
     const raw = h("div", { class: "dz-raw" });
     swatches.forEach(s => raw.append(h("div", { class: "dz-rawsw" }, h("i", { style: { background: s.hex }, title: s.hex }),
-      ...["bg", "ink", "accent"].map((k, i) => h("button", { type: "button", title: `Use as ${["ground", "ink", "spot"][i]}`, onclick: () => set(k, s.hex, { paletteName: "Custom" }) }, "GIS"[i])))));
+      ...["bg", "ink", "accent"].map((k, i) => h("button", { type: "button", title: `Use as the ${["background", "text", "accent"][i]} colour`, onclick: () => set(k, s.hex, { paletteName: "Custom" }) }, ["Bg", "Text", "Acc"][i])))));
     const sg = h("div", { class: "dz-pals" });
     sugg.forEach(p => sg.append(palButton(p)));
-    fromPic.append(sg, h("span", { class: "legend" }, "Its colours — G I S puts one in as ground, ink or spot"), raw);
+    fromPic.append(sg, h("span", { class: "legend" }, "Colours in your picture: click Bg, Text or Acc to use one"), raw);
   })();
 
   // library
@@ -343,16 +353,21 @@ function picturePanel() {
   const meta = SP.cover.meta();
   out.push(group(null, drop, image ? row(h("small", { class: "dz-meta" }, meta ? `${meta.name} · ${meta.w}×${meta.h}` : ""), btn("Remove picture", () => SP.cover.clear())) : null));
   if (!image) { out.push(hint("No picture: the sleeve is type only, which works too.")); return out; }
+  out.push(group(null, row(btn("Show my photo as it is", () => setMany({ imgTone: "original", dim: 0, imgEffect: "none", imgPosterize: 0, imgContrast: 100, imgBlur: 0 })),
+      btn("Blend it into the colours", () => setMany({ imgTone: "ink", dim: 45 }))),
+    hint("New designs tint the photo with the sleeve's colours and fade it so the words read. These buttons switch that off or back on.")));
   out.push(group("Placement", pick("imgMode", null, [["bleed", "Full bleed"], ["panel", "Panel"], ["band", "Band"], ["circle", "Circle"], ["split", "Split"], ["inset", "Inset"], ["top", "Top"], ["arch", "Arch"]], drawImgMode, { rebuild: true }),
-    ...(st.imgMode !== "bleed" ? [row(range("imgBoxSize", "Window size", 40, 160, 1, { unit: "%", half: true, reset: 100 }), range("dim", "Fade", 0, 95, 1, { unit: "%", half: true, reset: 60 })),
-      row(range("imgBoxX", "Window across", -40, 40, 0.5, { unit: "%", half: true, reset: 0 }), range("imgBoxY", "Window down", -40, 40, 0.5, { unit: "%", half: true, reset: 0 }))] : [range("dim", "Fade into the ground", 0, 95, 1, { unit: "%", reset: 60 })])));
-  out.push(group("Crop",
-    row(btn("−", () => set("zoom", Math.max(20, st.zoom - 10))), range("zoom", "Zoom", 20, 300, 1, { unit: "%", reset: 100 }), btn("+", () => set("zoom", Math.min(300, st.zoom + 10)))),
+    ...(st.imgMode !== "bleed" ? [row(range("imgBoxSize", "Frame size", 40, 160, 1, { unit: "%", half: true, reset: 100 }), range("dim", "Fade", 0, 95, 1, { unit: "%", half: true, reset: 60 })),
+      row(range("imgBoxX", "Frame across", -40, 40, 0.5, { unit: "%", half: true, reset: 0 }), range("imgBoxY", "Frame down", -40, 40, 0.5, { unit: "%", half: true, reset: 0 }))] : [range("dim", "Fade into the background", 0, 95, 1, { unit: "%", reset: 60 })]),
+    hint("Want the photo smaller? Pick Inset, Panel or Circle above, then Frame size.")));
+  out.push(group("Crop inside the frame",
+    row(btn("−", () => set("zoom", Math.max(20, st.zoom - 10))), range("zoom", "Zoom in / out", 20, 300, 1, { unit: "%", reset: 100 }), btn("+", () => set("zoom", Math.min(300, st.zoom + 10)))),
     row(range("shiftX", "Across", -100, 100, 0.5, { unit: "%", half: true, reset: 0 }), range("shiftY", "Down", -100, 100, 0.5, { unit: "%", half: true, reset: 0 })),
     row(btn("Fit whole picture", () => setMany({ zoom: fitZoom(), shiftX: 0, shiftY: 0 })), btn("Fill", () => setMany({ zoom: 100, shiftX: 0, shiftY: 0 }))),
-    hint("Drag the picture on the cover to move it; Ctrl/⌘ + scroll to zoom. Below 100% it floats on the ground.")));
+    hint("Drag the picture on the cover to move it; Ctrl/⌘ + scroll to zoom. Below 100% it floats on the background.")));
+  if (SR.IMG_EFFECTS) out.push(group("Print effect", pick("imgEffect", null, SR.IMG_EFFECTS, drawEffectMini, { rebuild: true })));
   out.push(group("Colour",
-    seg("imgTone", null, [["ink", "Ground → ink"], ["accent", "Ground → spot"], ["original", "Original"]]),
+    seg("imgTone", null, [["ink", "Tinted: text colour"], ["accent", "Tinted: accent"], ["original", "Original colours"]]),
     row(range("imgContrast", "Contrast", 50, 200, 5, { unit: "%", half: true, reset: 100 }), range("imgBlur", "Blur", 0, 100, 1, { half: true, reset: 0 })),
     range("imgPosterize", "Posterize", 0, 8, 1, { fmt: (v) => v >= 2 ? `${v} levels` : "off", reset: 0 })));
   return out;
@@ -546,13 +561,25 @@ function wordsPanel() {
     const inp = area ? h("textarea", { rows: 2, class: "up", spellcheck: "false", "aria-label": label }) : h("input", { type: "text", spellcheck: "false", "aria-label": label });
     inp.addEventListener("input", () => set(k, area ? inp.value : inp.value.replace(/\n/g, " ")));
     inputs[k] = inp;
-    return h("label", { class: "f" + (area ? " wide" : "") }, h("span", {}, label, area ? h("small", {}, " one line per row") : null), inp);
+    const lab = h("label", { class: "f" + (area ? " wide" : "") }, h("span", {}, label, area ? h("small", {}, " one line per row") : null), inp);
+    if (k !== "title") return lab;
+    // the size people reach for first, right under the words it changes
+    const sz = h("input", { type: "range", min: 40, max: 160, step: 1, "aria-label": "Title size" }), out = h("output");
+    sz.addEventListener("input", () => { out.textContent = sz.value + "%"; set("titleSize", +sz.value); });
+    inputs._size = sz; inputs._sizeOut = out;
+    const note = h("p", { class: "hint warn dz-fitnote", hidden: true }, "That's as big as the title fits across the sleeve. For bigger letters, put it on more lines (press Enter in the title).");
+    inputs._note = note;
+    return h("div", { class: "wide dz-titlebox" }, lab, h("label", { class: "f" }, h("span", {}, "Title size", out), sz), note);
   }));
   wordsBox = h("details", { class: "dz-wordsbox", open: prefs.wordsClosed ? null : true },
     h("summary", {}, "Words on the cover"), grid,
     h("p", { class: "hint" }, "Fonts, sizes and colours for each: click the words on the cover, or the Title / Artist / Footer tabs below."));
   wordsBox.addEventListener("toggle", () => { prefs.wordsClosed = !wordsBox.open; savePrefs(); });
-  wordsBox._sync = () => { for (const [k] of fields) if (document.activeElement !== inputs[k]) inputs[k].value = st[k] ?? ""; };
+  wordsBox._sync = () => {
+    for (const [k] of fields) if (document.activeElement !== inputs[k]) inputs[k].value = st[k] ?? "";
+    if (document.activeElement !== inputs._size) inputs._size.value = st.titleSize; inputs._sizeOut.textContent = st.titleSize + "%";
+  };
+  wordsBox._fit = (shrunk) => { inputs._note.hidden = !shrunk; };
   wordsBox._focus = () => { wordsBox.open = true; inputs.artist.focus(); inputs.artist.select(); wordsBox.scrollIntoView({ block: "nearest", behavior: "smooth" }); };
   wordsBox._sync();
   return wordsBox;
@@ -561,7 +588,7 @@ function wordsPanel() {
 /* ---------- mount ---------- */
 function mount(root) {
   el = root; st = App.state(); tab = prefs.tab || "title";
-  const lockChips = h("div", { class: "chips dz-locks" }, h("span", { class: "legend" }, "Keep"));
+  const lockChips = h("div", { class: "chips dz-locks" }, h("span", { class: "legend" }, "Lock when shuffling:"));
   const names = { colour: "Colours", type: "Type", layout: "Layout", motif: "Marks", border: "Border", backdrop: "Backdrop", picture: "Picture" };
   L.GROUPS.forEach(g => lockChips.append(h("button", { type: "button", class: "chip-b", "aria-pressed": String(!!locks()[g]), title: `Shuffling leaves the ${names[g].toLowerCase()} alone`, onclick: (e) => {
     prefs.locks = { ...locks(), [g]: !locks()[g] }; savePrefs(); e.currentTarget.setAttribute("aria-pressed", String(!!prefs.locks[g])); } }, names[g])));
@@ -573,6 +600,9 @@ function mount(root) {
   tabsEl = h("div", { class: "dz-tabs", role: "tablist" }, ...TABS.map(([k, t]) => h("button", { type: "button", role: "tab", "data-tab": k, onclick: () => select(k) }, t)));
   panel = h("div", { class: "dz-panel", role: "tabpanel" });
   const sizeSel = h("select", { "aria-label": "Download size", onchange: (e) => set("exportSize", e.target.value) }, ...["3000", "2000", "1400"].map(v => h("option", { value: v }, `${v} px`)));
+  const fmtSel = h("select", { "aria-label": "File type", onchange: (e) => { prefs.fmt = e.target.value; savePrefs(); } },
+    h("option", { value: "jpg" }, "JPG (small file)"), h("option", { value: "png" }, "PNG (lossless, large)"));
+  fmtSel.value = prefs.fmt || "jpg";
 
   el.append(
     h("div", { class: "dz-wrap" },
@@ -587,7 +617,7 @@ function mount(root) {
         h("div", { class: "dz-sleeve" }, canvas, overlay),
         h("div", { class: "dz-foot" },
           h("span", { class: "hint" }, "Click anything to edit it · drag to move · double-click words to retype · arrows nudge"),
-          h("div", { class: "dz-dl" }, h("output", { class: "dz-file" }), sizeSel, h("button", { type: "button", class: "btn small", onclick: download }, "Download PNG")))),
+          h("div", { class: "dz-dl" }, h("output", { class: "dz-file" }), sizeSel, fmtSel, h("button", { type: "button", class: "btn small primary", onclick: download }, "Download cover")))),
       h("aside", { class: "dz-side" }, wordsPanel(), h("p", { class: "dz-label" }, "Style"), tabsEl, panel)));
   sizeSel.value = st.exportSize || "3000";
 
@@ -601,7 +631,8 @@ function mount(root) {
 async function download() {
   const size = +(st.exportSize || 3000), c = document.createElement("canvas"); c.width = c.height = size;
   await SR.render(c, st, image, logo);
-  SP.download(await SP.canvasBlob(c), SR.filename(st, size));
+  const jpg = (prefs.fmt || "jpg") === "jpg";   // the grain makes PNGs huge (~15 MB at 3000 px); JPG at 0.92 is a few MB and what distributors expect
+  SP.download(await SP.canvasBlob(c, jpg ? "image/jpeg" : "image/png", jpg ? 0.92 : undefined), SR.filename(st, size).replace(/\.png$/, jpg ? ".jpg" : ".png"));
 }
 
 App.view("design", {

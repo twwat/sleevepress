@@ -86,3 +86,7 @@ body { padding-top: 0; }
 .files-switch a small { font: 11px var(--f-mono); color: var(--chalk-faint); }
 .files-switch a[aria-selected=true] { background: var(--chalk); }
 .files-switch a[aria-selected=true] b, .files-switch a[aria-selected=true] small { color: var(--room); }
+.status.pending { color: var(--chalk-dim); }
+.status.pending::before { background: var(--chalk-faint); }
+/* phones: the header scrolls away instead of covering a quarter of the screen */
+@media (max-width: 720px) { .bar { position: static; gap: 8px 10px; padding-block: 8px; } .bar-right { gap: 6px; } }

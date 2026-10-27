@@ -103,3 +103,5 @@
 .view-design .dz-words label.f > span small { color: var(--chalk-faint); font-size: 10px; }
 .view-design .dz-wordsbox .hint { padding: 4px 14px 12px; }
 .view-design .dz-label { margin: 6px 0 -2px; font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--chalk-dim); }
+.view-design .dz-titlebox { display: grid; gap: 8px; }
+.view-design .dz-fitnote { margin: 0; }

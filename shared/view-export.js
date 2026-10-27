@@ -85,8 +85,8 @@ const DEFAULT_OFF = new Set(["vinyl", "tracklist-md", "tracklist-csv"]);
 /* Why an output can't be made right now (or ""). */
 function missing(o) {
   const d = SP.get();
-  if (o.needs === "tracks" && !d.tracks.length) return "Add tracks in Words first.";
-  if (o.needs === "style" && !(d.style && d.style.prompt)) return "No style prompt yet: build one in Forge.";
+  if (o.needs === "tracks" && !d.tracks.length) return "Needs a tracklist: add one under Print → Tracklist, or More → Suno style.";
+  if (o.needs === "style" && !(d.style && d.style.prompt)) return "No Suno prompt yet: make one under More → Suno style.";
   return "";
 }
 async function filesOf(o) {
@@ -134,7 +134,7 @@ function mount(el) {
   zipBtn = h("button", { type: "button", class: "btn primary", id: "ex-zip", onclick: buildZip }, "Download selected (.zip)");
   countOut = h("span", { class: "ex-count", id: "ex-count" });
   const head = h("div", { class: "view-head" },
-    h("div", {}, h("h1", {}, "Export"), h("p", {}, "Every file for release day. Download one at a time, or tick what you need and get one zip.")),
+    h("div", {}, h("h1", {}, "Covers, promo images & text"), h("p", {}, "Every file for release day. Download one at a time, or tick what you need and get one zip.")),
     h("div", { class: "ex-zipbar" },
       h("button", { type: "button", class: "btn small", id: "ex-all", onclick: () => { setPicked(new Set(OUTS.filter(o => !missing(o)).map(o => o.id))); } }, "All"),
       h("button", { type: "button", class: "btn small", id: "ex-none", onclick: () => setPicked(new Set()) }, "None"),
