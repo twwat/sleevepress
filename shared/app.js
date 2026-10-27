@@ -89,7 +89,7 @@ async function env() { return Makers.env(SP.get(), await SP.cover.image(), await
 /* ---------- saving ---------- */
 async function saveToLibrary(asNew) {
   const c = await thumb(320);
-  const id = await SP.library.save(c.toDataURL("image/jpeg", 0.82), asNew);
+  const id = await SP.library.save(c.toDataURL("image/jpeg", 0.82), asNew); markSaved();
   SP.toast(asNew ? "Saved as a new release in your library" : "Saved to your library");
   return id;
 }
@@ -121,31 +121,168 @@ function route() {
     $("views").appendChild(d.el); d.mount(d.el);
   }
   d.el.hidden = false; current = v;
-  document.querySelectorAll("[data-go]").forEach(a => a.setAttribute("aria-current", a.dataset.go === v ? "page" : "false"));
+  const navKey = FILE_VIEWS.includes(v) ? "files" : views[v].minor ? "more" : v;
+  document.querySelectorAll("[data-go]").forEach(a => a.setAttribute("aria-current", a.dataset.go === navKey ? "page" : "false"));
+  filesSwitch(v);
   document.body.dataset.view = v;
   if (d.show) d.show();
   window.scrollTo(0, 0);
 }
 
+/* ---------- dialogs and menus ---------- */
+/* A modal: title, body (node or nodes), actions [{ label, primary, danger, onclick → false keeps it open }]. Esc / backdrop close it. */
+function modal({ title, body, actions = [], wide }) {
+  const close = () => { wrap.remove(); document.removeEventListener("keydown", esc); if (last && last.focus) last.focus(); };
+  const esc = (e) => { if (e.key === "Escape") close(); };
+  const last = document.activeElement;
+  const box = h("div", { class: "dlg" + (wide ? " wide" : ""), role: "dialog", "aria-modal": "true", "aria-label": title },
+    h("h2", {}, title), h("div", { class: "dlg-body" }, body),
+    h("div", { class: "dlg-actions" }, ...actions.map(a => h("button", { type: "button", class: "btn" + (a.primary ? " primary" : "") + (a.danger ? " danger" : ""),
+      onclick: async () => { const keep = a.onclick && (await a.onclick()) === false; if (!keep) close(); } }, a.label))));
+  const wrap = h("div", { class: "dlg-wrap", onmousedown: (e) => { if (e.target === wrap) close(); } }, box);
+  document.body.append(wrap); document.addEventListener("keydown", esc);
+  const f = box.querySelector("input, textarea, button.primary, button"); if (f) f.focus();
+  return { close, box };
+}
+/* A drop-down menu under a button. items: [{ label, sub, onclick } | "-"] or a function returning them. */
+function menu(button, items) {
+  let open = null;
+  const shut = () => { if (open) { open.remove(); open = null; button.setAttribute("aria-expanded", "false"); document.removeEventListener("mousedown", away); document.removeEventListener("keydown", key); } };
+  const away = (e) => { if (open && !open.contains(e.target) && e.target !== button && !button.contains(e.target)) shut(); };
+  const key = (e) => { if (e.key === "Escape") { shut(); button.focus(); } };
+  button.setAttribute("aria-haspopup", "menu"); button.setAttribute("aria-expanded", "false");
+  button.addEventListener("click", async () => {
+    if (open) return shut();
+    const list = typeof items === "function" ? await items() : items;
+    open = h("div", { class: "menu", role: "menu" }, ...list.map(it => it === "-" ? h("hr") : h("button", { type: "button", role: "menuitem", class: it.danger ? "danger" : null,
+      onclick: () => { shut(); it.onclick(); } }, h("span", {}, it.label), it.sub ? h("small", {}, it.sub) : null)));
+    document.body.append(open);
+    const r = button.getBoundingClientRect(), w = Math.min(300, innerWidth - 16);
+    Object.assign(open.style, { top: `${r.bottom + 6 + scrollY}px`, left: `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + scrollX}px`, width: `${w}px` });
+    button.setAttribute("aria-expanded", "true");
+    document.addEventListener("mousedown", away); document.addEventListener("keydown", key);
+    const f = open.querySelector("button"); if (f) f.focus();
+  });
+  return shut;
+}
+
+/* ---------- "is this release saved in the library?" ---------- */
+const sigOf = (rec) => { const r = SP.clone(rec); delete r.looks; delete r.libId; delete r.saved; delete r.exported; return JSON.stringify(r); };
+let savedSig = null;
+function markSaved() { savedSig = sigOf(SP.get()); }
+/* True when the current release has words or settings that aren't in the library. */
+function unsaved() { return savedSig !== sigOf(SP.get()); }
+
+/* ---------- the words form (first run, New release, Defaults) ---------- */
+function wordsForm(values, opts = {}) {
+  const f = {}, field = (k, label, o = {}) => {
+    const inp = o.area ? h("textarea", { rows: 2, class: "up", spellcheck: "false" }) : h("input", { type: "text", placeholder: o.ph || "", spellcheck: "false" });
+    inp.value = values[k] || ""; f[k] = inp;
+    return h("label", { class: "f" + (o.half ? " half" : "") }, h("span", {}, label), inp);
+  };
+  const el = h("div", { class: "wordsform" },
+    h("div", { class: "row" }, field("artist", "Artist"), field("label", "Record label", { ph: "optional" })),
+    field("title", "Title (one line per row)", { area: true }),
+    h("div", { class: "row" }, field("catalog", "Catalogue no.", { ph: "e.g. ABC-001" }), field("year", "Year", { ph: "2026" })),
+    opts.footer !== false ? field("footer", "Footer line", { ph: "small print along the bottom" }) : null);
+  return { el, values: () => Object.fromEntries(Object.entries(f).map(([k, i]) => [k, i.value])) };
+}
+function pictureField() {
+  const input = h("input", { type: "file", accept: "image/*", hidden: true });
+  const txt = h("span", {}, "Add a picture (optional): drop it here or click");
+  const drop = h("label", { class: "file-drop" }, input, txt);
+  SP.bindDrop(SP.cover, { drop, input, onText: (im, m) => { txt.textContent = im ? `Picture: ${(m && m.name) || "added"} · drop another to replace` : "Add a picture (optional): drop it here or click"; } });
+  return drop;
+}
+
+/* New release: ask about unsaved work, then a short form, then Discover. */
+async function newRelease() {
+  const go2 = () => {
+    const form = wordsForm(SP.defaultWords());
+    const keepLook = h("input", { type: "checkbox", checked: true });
+    modal({ title: "New release", wide: true, body: [form.el, h("label", { class: "check" }, keepLook, "Keep the current look (colours, type, layout)"),
+      h("p", { class: "hint" }, "These start out as your defaults. Change the defaults under ⚙ → Defaults for new releases.")],
+      actions: [{ label: "Cancel" }, { label: "Start", primary: true, onclick: async () => {
+        await SP.reset(form.values(), { freshLook: !keepLook.checked }); clearHistory(); markSaved();
+        go("discover"); SP.toast("New release started. Pick a design you like, or open Design.");
+      } }] });
+  };
+  if (!unsaved()) return go2();
+  modal({ title: "Keep this release?", body: h("p", {}, "This release isn't saved in your library yet. Save a copy before starting a new one?"),
+    actions: [{ label: "Cancel" }, { label: "Don't save" , onclick: () => { setTimeout(go2, 0); } }, { label: "Save, then new", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(go2, 0); } }] });
+}
+function openFile() {
+  const inp = h("input", { type: "file", accept: ".json,application/json", hidden: true });
+  inp.addEventListener("change", async () => { const f = inp.files[0]; inp.remove(); if (!f) return; const kind = await SP.importFile(f); if (kind === "release") { clearHistory(); markSaved(); go("design"); } else if (kind === "library") go("library"); });
+  document.body.append(inp); inp.click();
+}
+async function openSaved(id) {
+  const doOpen = async () => { if (await SP.library.open(id)) { markSaved(); go("design"); SP.toast("Opened"); } };
+  if (!unsaved()) return doOpen();
+  modal({ title: "Open another release?", body: h("p", {}, "The release you're on has changes that aren't in your library."),
+    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: doOpen }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); await doOpen(); } }] });
+}
+function editDefaults() {
+  const form = wordsForm(SP.defaultWords());
+  modal({ title: "Defaults for new releases", wide: true, body: [h("p", { class: "hint" }, "Every new release starts with these words. Kept in this browser."), form.el],
+    actions: [{ label: "Cancel" }, { label: "Use this release's words", onclick: () => { SP.setDefaultWords(SP.get().release) ? SP.toast("Defaults set from this release") : SP.toast("This browser won't store settings"); } },
+      { label: "Save defaults", primary: true, onclick: () => { SP.setDefaultWords(form.values()) ? SP.toast("Defaults saved") : SP.toast("This browser won't store settings"); } }] });
+}
+function resetEverything() {
+  modal({ title: "Reset everything?", body: [h("p", {}, "This deletes everything Sleeve Press keeps in this browser: the release you're on, your saved releases, flagged looks, logo and defaults. The page then reloads like a first visit."),
+    h("p", { class: "hint" }, "Want to keep a copy? Cancel, then ⚙ → Back up everything.")],
+    actions: [{ label: "Cancel" }, { label: "Delete everything", danger: true, onclick: async () => { await SP.wipeAll(); location.reload(); } }] });
+}
+
+/* First visit: a short start screen instead of somebody else's demo release. */
+function welcome() {
+  let welcomed = false; try { welcomed = !!localStorage.getItem("sleevepress.welcomed"); } catch (e) {}
+  if (!SP.isFresh() || welcomed) return;
+  const form = wordsForm({ ...SP.defaultWords(), artist: "", title: "" }, { footer: false });
+  const asDefault = h("input", { type: "checkbox" });
+  const done = () => { try { localStorage.setItem("sleevepress.welcomed", "1"); } catch (e) {} };
+  modal({ title: "Start a release", wide: true, body: [
+      h("p", {}, "Type your words and Sleeve Press makes endless cover designs from them. Everything stays in this browser."),
+      form.el, pictureField(), h("label", { class: "check" }, asDefault, "Also use these as my defaults for new releases")],
+    actions: [{ label: "Just show me an example", onclick: done },
+      { label: "Show me designs", primary: true, onclick: async () => {
+        const v = form.values(); if (!v.artist.trim() && !v.title.trim()) { SP.toast("Type an artist or a title first"); return false; }
+        const w = { ...SP.defaultWords(), ...Object.fromEntries(Object.entries(v).filter(([, x]) => x.trim())) };
+        w.footer = [w.catalog, w.year].filter(x => x && x.trim()).join(" · ");
+        SP.replace({ ...SP.get(), release: { ...SP.get().release, ...w } }); clearHistory();
+        if (asDefault.checked) SP.setDefaultWords(w);
+        done(); go("discover");
+      } }] });
+}
+
 /* ---------- top bar ---------- */
+const FILE_VIEWS = ["export", "print"];
 function mountBar() {
   const bar = $("bar");
   bar.innerHTML = `
     <a class="brand" href="#discover">Sleeve Press</a>
     <nav class="tabs" aria-label="Sections"></nav>
     <div class="bar-right">
-      <button type="button" class="relchip" id="relchip" title="Edit the words on the cover"><i></i><b></b><span></span></button>
+      <button type="button" class="relchip" id="relchip" title="Change the words on the cover"><i></i><b></b><span></span></button>
       <span class="status" id="status" title=""></span>
       <button type="button" class="btn small" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
       <button type="button" class="btn small" id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>↷</button>
+      <button type="button" class="btn small" id="newBtn" title="Start a new release">New</button>
+      <button type="button" class="btn small" id="openBtn" title="Open a saved release or a file">Open ▾</button>
       <button type="button" class="btn small primary" id="saveBtn" title="Save this release to your library (Ctrl+S)">Save</button>
+      <button type="button" class="btn small" id="gearBtn" title="Settings" aria-label="Settings">⚙</button>
     </div>`;
   const nav = bar.querySelector(".tabs");
+  const tab = (href, label, go2, cls) => { const a = document.createElement("a"); a.href = href; a.dataset.go = go2; a.textContent = label; if (cls) a.className = cls; nav.appendChild(a); return a; };
   for (const n of order) {
-    const d = views[n]; if (d.hidden) continue;
-    const a = document.createElement("a"); a.href = "#" + n; a.dataset.go = n; a.textContent = d.label;
-    if (d.minor) a.className = "minor";
-    nav.appendChild(a);
+    const d = views[n]; if (d.hidden || d.minor || n === "print") continue;
+    if (n === "export") { tab("#export", "Get files", "files"); continue; }
+    tab("#" + n, d.label, n);
+  }
+  const minor = order.filter(n => views[n].minor);
+  if (minor.length) {
+    const more = h("button", { type: "button", class: "tabbtn", "data-go": "more" }, "More ▾"); nav.appendChild(more);
+    menu(more, minor.map(n => ({ label: views[n].label, sub: views[n].sub, onclick: () => go(n) })));
   }
   const chip = $("relchip");
   const refresh = () => {
@@ -155,15 +292,29 @@ function mountBar() {
     chip.querySelector("span").textContent = [r.catalog, d.tracks.length ? `${d.tracks.length} tracks` : ""].filter(Boolean).join(" · ");
   };
   SP.on(refresh); refresh();
-  chip.addEventListener("click", () => { go("design"); setTimeout(() => window.Design && Design.select && Design.select("title"), 30); });
+  chip.addEventListener("click", () => { go("design"); setTimeout(() => window.Design && Design.words && Design.words(), 30); });
   const st = $("status");
   const showStatus = (s) => {
     st.className = "status " + s;
     st.textContent = s === "browser" ? "Autosaved" : "Not saving";
-    st.title = s === "browser" ? "Your work is kept in this browser. Save puts a copy in your library." : "This browser won't keep data for this page (private window or file:// restrictions). Use Library → Back up to keep your work.";
+    st.title = s === "browser" ? "Your work is kept in this browser as you go. Save puts a copy in your library." : "This browser won't keep data for this page (private window or file:// restrictions). Use ⚙ → Back up everything to keep your work.";
   };
   SP.onStatus(showStatus); showStatus(SP.status());
   $("saveBtn").addEventListener("click", () => saveToLibrary());
+  $("newBtn").addEventListener("click", newRelease);
+  menu($("openBtn"), async () => {
+    const list = (await SP.library.list()).slice(0, 8);
+    return [...list.map(e => ({ label: e.name, sub: [e.catalog, new Date(e.updated).toLocaleDateString()].filter(Boolean).join(" · "), onclick: () => openSaved(e.id) })),
+      ...(list.length ? ["-"] : [{ label: "Nothing saved yet", sub: "Save puts the release you're on here", onclick: () => {} }, "-"]),
+      { label: "All saved releases…", onclick: () => go("library") }, { label: "Open a file…", sub: "release.json or a backup", onclick: openFile }];
+  });
+  menu($("gearBtn"), [
+    { label: "Defaults for new releases…", sub: "the words a new release starts with", onclick: editDefaults },
+    { label: "Back up everything", sub: "one file: saved releases, looks, logo", onclick: () => SP.library.backup() },
+    { label: "Restore from a backup…", onclick: openFile },
+    "-",
+    { label: "Reset everything…", sub: "delete all Sleeve Press data in this browser", danger: true, onclick: resetEverything },
+  ]);
   $("undoBtn").addEventListener("click", undo); $("redoBtn").addEventListener("click", redo);
   undoFns.add((a, b) => { $("undoBtn").disabled = !a; $("redoBtn").disabled = !b; });
   document.addEventListener("keydown", (e) => {
@@ -174,6 +325,14 @@ function mountBar() {
     else if (e.key.toLowerCase() === "z" && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (e.key.toLowerCase() === "y" && !typing) { e.preventDefault(); redo(); }
   });
+}
+/* Get files = Export (digital) + Print, one tab with a switch at the top of each. */
+function filesSwitch(v) {
+  const d = views[v]; if (!FILE_VIEWS.includes(v) || !d.el || d.el.querySelector(".files-switch")) return;
+  const sw = h("div", { class: "files-switch", role: "tablist", "aria-label": "Kind of files" },
+    h("a", { href: "#export", role: "tab", "aria-selected": String(v === "export") }, h("b", {}, "Digital"), h("small", {}, "covers, promo images, text")),
+    h("a", { href: "#print", role: "tab", "aria-selected": String(v === "print") }, h("b", {}, "Print"), h("small", {}, "CD inserts, vinyl labels, stickers")));
+  d.el.prepend(sw);
 }
 
 /* ---------- small DOM helpers shared by the views ---------- */
@@ -209,10 +368,13 @@ function migrateLooks() {
 function trackPicture() { const upd = async () => { Looks.picture = !!(await SP.cover.image()); }; SP.cover.on(upd); upd(); }
 function start() {
   trackPicture();
+  if (SP.isFresh()) markSaved();   // the example release isn't "unsaved work"
+  SP.library.list().then(async (idx) => { const id = SP.get().libId; if (id && idx.some(e => e.id === id)) { const e = await SP.vault.get("lib." + id); if (e) savedSig = sigOf(e.record); } });
   migrateLooks(); SP.on(() => { if (SP.get().looks.some(l => !l || !l.id)) migrateLooks(); });
   mountBar(); window.addEventListener("hashchange", route); route();
+  welcome();
 }
 
-window.App = { completeLook, state, commit, applyLook, checkpoint, undo, redo, view, go, start, lookId, flagged, isFlagged, flag, unflag, toggleFlag,
+window.App = { modal, menu, newRelease, openFile, openSaved, editDefaults, resetEverything, unsaved, markSaved, completeLook, state, commit, applyLook, checkpoint, undo, redo, view, go, start, lookId, flagged, isFlagged, flag, unflag, toggleFlag,
   smallImage, thumb, env, saveToLibrary, nextRelease, h, lazy, queue, current: () => current };
 })();

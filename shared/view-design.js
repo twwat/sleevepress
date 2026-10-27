@@ -187,7 +187,6 @@ function panelFor(t) {
   const resetPos = (keys, label = "Reset position") => btn(label, () => setMany(keys));
   if (t === "title") {
     P.push(group(null,
-      text("title", "Title (one line per row)", { area: true, rows: 2, cls: "up" }),
       row(seg("titleCase", "Case", [["upper", "AA"], ["title", "Aa"], ["lower", "aa"], ["asis", "As typed"]], { half: true }), colourSeg("titleColor", "Colour", { half: true })),
       pick("titleStyle", "Style", [["solid", "Solid"], ["outline", "Outline"], ["shadow", "Shadow"], ["echo", "Echo"], ["block", "Block"]], drawTitleStyle, { wide: true }),
       check("titleAccent", "Last line in the spot colour"),
@@ -202,7 +201,6 @@ function panelFor(t) {
   }
   if (t === "artist") {
     P.push(group(null,
-      row(text("artist", "Artist", { half: true }), text("year", "Year / edition", { half: true, ph: "2026" })),
       row(seg("artistCase", "Case", [["upper", "AA"], ["title", "Aa"], ["lower", "aa"], ["asis", "As typed"]], { half: true }), colourSeg("artistColor", "Colour", { half: true })),
       seg("artistWeight", "Weight", [[600, "Regular"], [700, "Bold"], [800, "Heavy"]])));
     P.push(group("Type", fontPick("artistFont", "Face", { empty: "Same as footer" }),
@@ -215,7 +213,6 @@ function panelFor(t) {
   }
   if (t === "footer") {
     P.push(group(null,
-      text("footer", "Footer line", { ph: "KGN — N17 · DPWR-001" }),
       row(seg("footerCase", "Case", [["upper", "AA"], ["title", "Aa"], ["asis", "As typed"]], { half: true }), colourSeg("footerColor", "Colour", { half: true })),
       row(range("footerSize", "Size", 50, 200, 5, { unit: "%", half: true, reset: 100 }), range("footerOpacity", "Strength", 20, 100, 1, { unit: "%", half: true, reset: 58 })),
       range("footerTrack", "Letter spacing", 0, 50, 1, { reset: 25 })));
@@ -370,8 +367,8 @@ function fitZoom() {
 function labelPanel() {
   const out = [];
   const marks = [["none", "None"], ["text", "Name"], ["box", "Boxed"], ["stamp", "Roundel"], ["logo", "Logo"]];
-  out.push(group(null, text("label", "Record label", { ph: "DUPPY WIRE SOUND" }),
-    pick("labelMark", "Show it on the sleeve as", marks, drawMark, { rebuild: true })));
+  out.push(group(null, pick("labelMark", "Show the record label on the sleeve as", marks, drawMark, { rebuild: true }),
+    hint("The label's name and the catalogue number are in “Words on the cover” above.")));
   if (st.labelMark === "logo" || !logo) {
     const input = h("input", { type: "file", accept: "image/*", hidden: true });
     const drop = h("label", { class: "file-drop" }, input, h("span", {}, logo ? "Drop a new logo, or click to choose" : "Add your logo: drop a PNG/SVG/JPG here, or click"));
@@ -389,8 +386,7 @@ function labelPanel() {
       hint("Or drag it on the cover.")));
   }
   const rev = h("p", { class: "hint warn" });
-  out.push(group("Catalogue", text("catalog", "Catalogue number", { ph: "DPWR-001" }),
-    check("plate", "Catalogue plate", { rebuild: true }),
+  out.push(group("Catalogue", check("plate", "Catalogue plate", { rebuild: true }),
     ...(st.plate ? [row(seg("platePos", "Plate", [["tr", "Top right"], ["br", "Bottom right"]], { half: true }), text("plateText", "Plate text", { half: true, ph: "blank = catalogue no." }))] : []),
     check("barcode", "Barcode", { rebuild: true }),
     ...(st.barcode ? [pick("barcodeStyle", null, [["box", "Boxed"], ["clear", "Clear"], ["spot", "Spot"], ["spotbox", "Spot box"]], drawBarcodeMini, { wide: true }),
@@ -528,7 +524,7 @@ function shuffle(seed) {
   s.lookSeed = seed; writing = true; App.commit(s, { force: true, paletteName: s.paletteName }); SP.patch("sleeve", { lookSeed: seed }); writing = false;
   st = App.state(); buildPanel(); draw(); updateSeed();
 }
-function updateSeed() { el.querySelector(".dz-seed b").textContent = SP.get().sleeve.lookSeed || "—"; }
+function updateSeed() { const n = SP.get().sleeve.lookSeed; el.querySelector(".dz-seed span").hidden = !n; el.querySelector(".dz-seed b").textContent = n || ""; }
 let varBase = 1;
 function showVariations() {
   const strip = el.querySelector(".dz-vars"), grid = strip.querySelector(".dz-vargrid"); strip.hidden = false; grid.innerHTML = "";
@@ -539,6 +535,27 @@ function showVariations() {
       h("span", { class: "iconbtn dz-varflag", role: "button", title: "Flag for later", onclick: (e) => { e.stopPropagation(); const on = App.toggleFlag(SR.lookOf(s)); e.currentTarget.setAttribute("aria-pressed", String(on)); } }, "♥")));
     q(() => App.thumb(c, s));
   }
+}
+
+/* ---------- the words: every piece of text on the cover, in one place ---------- */
+let wordsBox = null;
+function wordsPanel() {
+  const fields = [["artist", "Artist"], ["title", "Title", true], ["label", "Record label"], ["catalog", "Catalogue no."], ["year", "Year"], ["footer", "Footer line"]];
+  const inputs = {};
+  const grid = h("div", { class: "dz-words" }, ...fields.map(([k, label, area]) => {
+    const inp = area ? h("textarea", { rows: 2, class: "up", spellcheck: "false", "aria-label": label }) : h("input", { type: "text", spellcheck: "false", "aria-label": label });
+    inp.addEventListener("input", () => set(k, area ? inp.value : inp.value.replace(/\n/g, " ")));
+    inputs[k] = inp;
+    return h("label", { class: "f" + (area ? " wide" : "") }, h("span", {}, label, area ? h("small", {}, " one line per row") : null), inp);
+  }));
+  wordsBox = h("details", { class: "dz-wordsbox", open: prefs.wordsClosed ? null : true },
+    h("summary", {}, "Words on the cover"), grid,
+    h("p", { class: "hint" }, "Fonts, sizes and colours for each: click the words on the cover, or the Title / Artist / Footer tabs below."));
+  wordsBox.addEventListener("toggle", () => { prefs.wordsClosed = !wordsBox.open; savePrefs(); });
+  wordsBox._sync = () => { for (const [k] of fields) if (document.activeElement !== inputs[k]) inputs[k].value = st[k] ?? ""; };
+  wordsBox._focus = () => { wordsBox.open = true; inputs.artist.focus(); inputs.artist.select(); wordsBox.scrollIntoView({ block: "nearest", behavior: "smooth" }); };
+  wordsBox._sync();
+  return wordsBox;
 }
 
 /* ---------- mount ---------- */
@@ -571,11 +588,11 @@ function mount(root) {
         h("div", { class: "dz-foot" },
           h("span", { class: "hint" }, "Click anything to edit it · drag to move · double-click words to retype · arrows nudge"),
           h("div", { class: "dz-dl" }, h("output", { class: "dz-file" }), sizeSel, h("button", { type: "button", class: "btn small", onclick: download }, "Download PNG")))),
-      h("aside", { class: "dz-side" }, tabsEl, panel)));
+      h("aside", { class: "dz-side" }, wordsPanel(), h("p", { class: "dz-label" }, "Style"), tabsEl, panel)));
   sizeSel.value = st.exportSize || "3000";
 
   bindCanvas();
-  SP.on(() => { if (writing) return; st = App.state(); if (!visible) { stale = true; return; } if (!panel.contains(document.activeElement)) buildPanel(); else refreshVisibility(); draw(); updateSeed(); });
+  SP.on(() => { if (wordsBox) wordsBox._sync(); if (writing) return; st = App.state(); if (wordsBox) wordsBox._sync(); if (!visible) { stale = true; return; } if (!panel.contains(document.activeElement)) buildPanel(); else refreshVisibility(); draw(); updateSeed(); });
   SP.cover.on(async () => { image = await SP.cover.image(); st = App.state(); if (visible) { buildPanel(); draw(); } else stale = true; });
   SP.logo.on(async () => { logo = await SP.logo.image(); if (visible) { buildPanel(); draw(); } else stale = true; });
   window.addEventListener("resize", SP.rafOnce(positionSel));
@@ -592,5 +609,5 @@ App.view("design", {
   show() { visible = true; st = App.state(); if (stale) { stale = false; buildPanel(); } draw(); updateSeed(); },
   hide() { visible = false; },
 });
-window.Design = { select: (t) => select(t, { focus: true }) };
+window.Design = { select: (t) => select(t, { focus: true }), words: () => wordsBox && wordsBox._focus() };
 })();
