@@ -379,9 +379,10 @@ function randomize(state, seed, locks = {}, opts = {}) {
     }
     const bold = scheme === "bold" ? boldArea(s) : null;
     if (scheme === "pattern" || scheme === "combo" || scheme === "bold") {
-      // family first (plaid, camo, animal, checks, dots…), then a pattern within it, so every family gets its share
-      const fams = [...new Set(pats.map(x => x.family))], fam = dealt(bold ? "patternFamily:bold" : "patternFamily", fams);
-      const P0 = dealt("pattern:" + fam, pats.filter(x => x.family === fam)); s.pattern = P0.id;
+      // one deck of every pattern, small families entered two or three times so each family gets a fair share
+      // (a 2-pattern family would otherwise be lost among 12 plaids); dealt by card, so no pattern repeats within a pass
+      const famSize = {}; pats.forEach(x => { famSize[x.family] = (famSize[x.family] || 0) + 1; });
+      const P0 = dealt("pattern", deck(pats.map(x => [x, Math.max(1, Math.min(3, Math.round(6 / famSize[x.family])))]))); s.pattern = P0.id;
       s.patternSeed = between(1, 9999); s.patternScale = between(65, 150, 5);
       s.patternAngle = chance(0.25) ? pick([45, -45, 30, 15, -15, 90]) : 0;
       s.patternColor = dealt("patternColor", deck([["ink", 3], ["accent", 2], ["duo", 2]]));
@@ -393,7 +394,7 @@ function randomize(state, seed, locks = {}, opts = {}) {
       s.patternAmt = Math.round(between(30, 75) * (1 - busy * 0.55) * (pic ? 0.6 : 1));
       // an all-over pattern half the time goes loud, with the words on cut-out plates
       // plaid, camo, animal prints, checks and fabrics are hero patterns: they want to be seen, so they mostly get plates
-      const hero = ["plaid", "camo", "animal", "check", "fabric"].includes(fam);
+      const hero = ["plaid", "camo", "animal", "check", "fabric"].includes(P0.family);
       if (!bold && s.patternArea === "full" && !pic && chance(hero ? 0.8 : 0.4)) { s.plates = chance(0.6) ? "all" : "title"; s.patternAmt = between(55, 95); s.patternScale = between(80, 170, 5); }
       if (bold) { s.patternArea = bold.area; s.patternPos = bold.pos; s.patternAmt = between(70, 100); s.patternScale = between(80, 170, 5); }
       else if (scheme === "bold") { s.patternArea = "edge"; s.patternAmt = between(60, 90); }   // no free side: a strong pattern border instead
@@ -658,7 +659,10 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
         const start = Math.floor(rnd() * 4);
         for (let i = 0; i < 4; i++) {
           const [cx, cy] = spots[(start + i) % 4];
-          if (busy.every(b => !overlap(R(cx - w / 2, cy - h / 2, w, h), b, 2))) {
+          // and never on a loud pattern strip
+          const loud = s.pattern !== "none" && s.patternArea !== "shape" &&
+            (((patternList().find(x => x.id === s.pattern) || {}).busy ?? 0.5) * s.patternAmt / 100 > 0.15);
+          if (busy.every(b => !overlap(R(cx - w / 2, cy - h / 2, w, h), b, 2)) && !(loud && patternRect(s).some(a => overlap(a, R(cx - w / 2, cy - h / 2, w, h), 1)))) {
             s.labelMark = kind; s.labelSize = Math.round(k * 100); s.labelX = Math.round(cx * 2) / 2; s.labelY = Math.round(cy * 2) / 2;
             s.labelColor = chance(0.25) ? "accent" : "ink"; s.labelOpacity = between(60, 90, 5); break;
           }

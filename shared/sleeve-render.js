@@ -519,7 +519,8 @@ function drawLabelMark(ctx, S, st, cx, cy, colour, faceName, logo) {
 /* ---------- the sleeve ---------- */
 async function render(canvas, state, image, logo) {
   const st = state, S = canvas.width;
-  const ctx = canvas.getContext("2d");
+  const base = canvas.getContext("2d");
+  let ctx = base;   // switches to a separate words layer while plates are on (see below)
   await loadFonts(st);
   const boxes = {};
 
@@ -550,13 +551,17 @@ async function render(canvas, state, image, logo) {
   const X = S * st.margin / 100;
   const alignOf = (el) => st[el + "Align"] || st.align;
   const ax = (w, el) => { const al = alignOf(el), dx = S * (st[el + "X"] || 0) / 100; return (al === "centre" ? (S - w) / 2 : al === "right" ? S - X - w : X) + dx; };
-  ctx.textBaseline = "alphabetic";
   // Cut-out plates: a patch of ground behind words, so a loud pattern or shape can run underneath.
+  // The words go on their own layer while plates are collected; plates are painted first, then the words on top,
+  // so a plate can never cover a word drawn before it.
   const plateOn = (el) => st.plates === "all" || (st.plates === "title" && el === "title");
-  const plate = (el, x, y, w, h, px, py = px) => {
-    if (!plateOn(el) || !(w > 0)) return;
-    const f = ctx.fillStyle; ctx.fillStyle = rgba(bg, 1); ctx.fillRect(x - px, y - py, w + px * 2, h + py * 2); ctx.fillStyle = f;
-  };
+  const plates = [];
+  const plate = (el, x, y, w, h, px, py = px) => { if (plateOn(el) && w > 0) plates.push([x - px, y - py, w + px * 2, h + py * 2]); };
+  let words = null;
+  if (st.plates && st.plates !== "none") {
+    words = document.createElement("canvas"); words.width = canvas.width; words.height = canvas.height; ctx = words.getContext("2d");
+  }
+  ctx.textBaseline = "alphabetic";
 
   // Artist (+ year)
   const artistY = S * st.artistY / 100;
@@ -632,10 +637,15 @@ async function render(canvas, state, image, logo) {
       return { l, x, y, w, col: st.titleAccent && i === lines.length - 1 ? spot : main };
     });
     const lw = Math.max(1, size * 0.028);
-    if (style !== "block") {
-      const desc = st.titleCase !== "upper" && /[gjpqy,]/.test(lines[lines.length - 1]) ? size * 0.24 : size * 0.06;
-      const th0 = size * lead * (lines.length - 1) + size * 0.74 + (style === "echo" ? size * 0.5 : 0);
-      plate("title", bx0, bottom - th0, bx1 - bx0, th0 + desc, size * 0.14, size * 0.12);
+    if (style !== "block" && plateOn("title")) {
+      // measured, per line: accents, tall ascenders, tails and the shadow / echo offsets all stay on the plate
+      let top = Infinity, bot = -Infinity;
+      placed.forEach(p => {
+        const m = ctx.measureText(p.l), asc = m.actualBoundingBoxAscent || size * 0.74, dsc = m.actualBoundingBoxDescent || 0;
+        top = Math.min(top, p.y - asc - (style === "echo" ? size * 0.48 : 0)); bot = Math.max(bot, p.y + dsc + (style === "shadow" ? size * 0.045 : 0));
+      });
+      const right = bx1 + (style === "shadow" ? size * 0.045 : 0);
+      plate("title", bx0, top, right - bx0, bot - top, size * 0.14, size * 0.1);
     }
     if (style === "block") {
       // Each line on a bar of spot colour; the text takes whichever of ground/ink reads best on it.
@@ -698,6 +708,12 @@ async function render(canvas, state, image, logo) {
 
   const lb = drawLabelMark(ctx, S, st, S * st.labelX / 100, S * st.labelY / 100, colourOf(st.labelColor), bodyFace, logo);
   if (lb) boxes.label = lb;
+
+  if (words) {
+    ctx = base;
+    ctx.fillStyle = rgba(bg, 1); plates.forEach(r => ctx.fillRect(...r));
+    ctx.drawImage(words, 0, 0);
+  }
 
   applyGrain(ctx, S, S, st.grain, S);
   return boxes;
