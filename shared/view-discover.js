@@ -87,7 +87,7 @@ function renderCard(card) {
     card._url = URL.createObjectURL(blob); card._img.src = card._url; card._ver = v;
     card._img.alt = `${st.font} on ${st.paletteName || "colours"}`;
     card._heart.setAttribute("aria-pressed", String(App.isFlagged(card._look)));
-    card.classList.remove("loading");
+    card.classList.remove("loading", "stale");
     if (window.__dcFirst && ++window.__dcFirst.n === 12) window.__dcFirst.t = performance.now() - window.__dcFirst.t0;
   });
 }
@@ -190,7 +190,7 @@ function mount(el) {
   filterBar = h("div", { class: "dc-filters" },
     chipRow("Mood", Looks.MOODS.map(m => [m, cap(m)]), v => prefs.mood === v, v => { prefs.mood = v; }),
     chipRow("Type feel", Looks.FEELS.map(m => [m, cap(m)]), v => prefs.feel === v, v => { prefs.feel = v; }),
-    chipRow("Keep mine", Looks.GROUPS.map(g => [g, GROUP_LABEL[g] || cap(g)]), v => prefs.locks[v], v => { prefs.locks[v] = !prefs.locks[v]; }, "dc-lock"));
+    chipRow("Keep from my design", Looks.GROUPS.map(g => [g, GROUP_LABEL[g] || cap(g)]), v => prefs.locks[v], v => { prefs.locks[v] = !prefs.locks[v]; }, "dc-lock"));
   filterBar.querySelector(".dc-row:last-child").title = "Keep the current release's settings for these parts";
 
   /* picture prompt */
@@ -216,8 +216,8 @@ function mount(el) {
 
   /* keep in step with the record */
   recordKey = keyOf();
-  const refresh = SP.debounce(() => { if (visible) { stale = false; ver++; watchAll(); } }, 700);
-  const changed = () => { stale = true; if (visible) refresh(); };
+  const refresh = SP.debounce(() => { if (visible) { stale = false; ver++; watchAll(); } }, 350);
+  const changed = () => { stale = true; cards.forEach(c => c.classList.add("stale")); if (visible) refresh(); };
   let lastLooks = SP.get().looks;
   SP.on((d) => {
     if (d.looks !== lastLooks) { lastLooks = d.looks; syncHearts(); }

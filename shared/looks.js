@@ -70,18 +70,28 @@ const GOOGLE_CSS = "https://fonts.googleapis.com/css2?" + [
 ].map(f => "family=" + f).join("&") + "&display=swap";
 
 /* ---------- layout presets: only positional keys, so they combine freely with colour and type ---------- */
-const LAYOUT_KEYS = ["align", "margin", "artistY", "motifY", "titlePos", "titleDy", "titleSize", "footerY"];
+const LAYOUT_KEYS = ["align", "margin", "artistY", "motifY", "titlePos", "titleDy", "titleSize", "footerY", "titleBleed", "titleRotate"];
 const LAYOUTS = {
-  classic: { label: "Classic", align: "left", margin: 11, artistY: 15.8, motifY: 20.6, titlePos: "centre", titleDy: 0, titleSize: 100, footerY: 92.2 },
-  centred: { label: "Centred", align: "centre", margin: 11, artistY: 15.8, motifY: 20.6, titlePos: "centre", titleDy: 0, titleSize: 100, footerY: 92.2 },
-  right: { label: "Right hand", align: "right", margin: 11, artistY: 15.8, motifY: 20.6, titlePos: "centre", titleDy: 0, titleSize: 100, footerY: 92.2 },
-  poster: { label: "Poster", align: "left", margin: 8, artistY: 11, motifY: 15.5, titlePos: "lower", titleDy: -1, titleSize: 128, footerY: 94.5 },
-  quiet: { label: "Quiet", align: "centre", margin: 14, artistY: 61, motifY: 65.5, titlePos: "centre", titleDy: -15, titleSize: 62, footerY: 91 },
-  flipped: { label: "Flipped", align: "left", margin: 11, artistY: 84, motifY: 77, titlePos: "upper", titleDy: -2, titleSize: 100, footerY: 93 },
-  stacked: { label: "Stacked low", align: "right", margin: 9, artistY: 44, motifY: 49, titlePos: "lower", titleDy: 3, titleSize: 110, footerY: 94.5 },
+  classic: { label: "Classic", align: "left", margin: 11, artistY: 15.8, motifY: 20.6, titlePos: "centre", titleDy: 0, titleSize: 100, footerY: 92.2, titleBleed: false, titleRotate: "none" },
+  centred: { label: "Centred", align: "centre", margin: 11, artistY: 15.8, motifY: 20.6, titlePos: "centre", titleDy: 0, titleSize: 100, footerY: 92.2, titleBleed: false, titleRotate: "none" },
+  right: { label: "Right hand", align: "right", margin: 11, artistY: 15.8, motifY: 20.6, titlePos: "centre", titleDy: 0, titleSize: 100, footerY: 92.2, titleBleed: false, titleRotate: "none" },
+  poster: { label: "Poster", align: "left", margin: 8, artistY: 11, motifY: 15.5, titlePos: "lower", titleDy: -1, titleSize: 128, footerY: 94.5, titleBleed: false, titleRotate: "none" },
+  quiet: { label: "Quiet", align: "centre", margin: 14, artistY: 61, motifY: 65.5, titlePos: "centre", titleDy: -15, titleSize: 62, footerY: 91, titleBleed: false, titleRotate: "none" },
+  flipped: { label: "Flipped", align: "left", margin: 11, artistY: 84, motifY: 77, titlePos: "upper", titleDy: -2, titleSize: 100, footerY: 93, titleBleed: false, titleRotate: "none" },
+  stacked: { label: "Stacked low", align: "right", margin: 9, artistY: 44, motifY: 49, titlePos: "lower", titleDy: 3, titleSize: 110, footerY: 94.5, titleBleed: false, titleRotate: "none" },
+  // the title too big for the sleeve, cropped by the far edge
+  giant: { label: "Giant", align: "left", margin: 8, artistY: 11, motifY: 15.5, titlePos: "lower", titleDy: 4, titleSize: 100, footerY: 95, titleBleed: true, titleRotate: "none" },
+  // everything small and tight in the bottom corner, the rest of the sleeve left open
+  corner: { label: "Corner", align: "left", margin: 9, artistY: 54, motifY: 57.5, titlePos: "lower", titleDy: 3.5, titleSize: 74, footerY: 94.5, titleBleed: false, titleRotate: "none" },
+  // the title runs up the left edge like a book spine; the other words keep to the column beside it
+  spine: { label: "Spine", align: "left", margin: 9, artistY: 15.8, motifY: 20.6, titlePos: "centre", titleDy: 0, titleSize: 118, footerY: 93.5, titleBleed: false, titleRotate: "up" },
+  // a lone mark at the top, the title and artist in one low band
+  lowband: { label: "Low band", align: "left", margin: 10, artistY: 89.5, motifY: 9.5, titlePos: "lower", titleDy: -0.5, titleSize: 88, footerY: 95, titleBleed: false, titleRotate: "none" },
+  // a big title at the very top, the artist under it, the lower half open
+  topheavy: { label: "Top heavy", align: "left", margin: 8, artistY: 47, motifY: 51, titlePos: "upper", titleDy: -18, titleSize: 122, footerY: 94.5, titleBleed: false, titleRotate: "none" },
 };
 
-const FRAME_STYLES = ["hairline", "double", "thick", "corners", "dashed", "inset", "round", "crop", "rules", "film"];
+const FRAME_STYLES = ["hairline", "double", "thick", "corners", "dashed", "inset", "round", "crop", "rules", "film", "ticket", "perforated", "bracket", "registration"];
 const MOTIFS = ["bars", "dots", "squares", "rings", "diamonds", "ticks", "wave", "slants", "plus", "chevrons"];
 
 /* ---------- colour generation ---------- */
@@ -91,8 +101,11 @@ function push(h, s, l, against, target, towardLight) {
   return hslToRgb([h, s, l]);
 }
 /* Rolls a palette that always clears 7:1 for ink and 3:1 for the spot. mode: dark | light | bold | any */
+/* Spot hues a warm or cool mood keeps to (degrees; warm wraps through red). */
+const SPOT_RANGE = { warm: [-30, 70], cool: [170, 280] };
+const hueIn = (h, [a, b]) => { const x = ((h - a) % 360 + 360) % 360; return x <= b - a; };
 function makePalette(rng, mode = "any", hue) {
-  const pick = (a) => a[Math.floor(rng() * a.length)];
+  const pick = (a) => a[Math.floor(rng() * a.length)], range = SPOT_RANGE[mode];
   if (mode === "warm") { hue = hue ?? (rng() * 80 - 25); mode = pick(["dark", "dark", "light", "bold"]); }
   if (mode === "cool") { hue = hue ?? (170 + rng() * 100); mode = pick(["dark", "dark", "light", "bold"]); }
   if (mode === "mono") return monoPalette(rng);
@@ -113,7 +126,7 @@ function makePalette(rng, mode = "any", hue) {
   // A mid-tone ground can leave even white or black short of 7:1; then move the ground away from the ink.
   if (contrast(ink, bg) < 7.1) { const [bh, bs, bl] = rgbToHsl(bg); bg = push(bh, bs, bl, ink, 7.1, !inkLight); }
   const bgDark = SP.relLum(bg) < 0.25;
-  let spot = hsl(h + off, 0.55 + rng() * 0.35, 0.4 + rng() * 0.18);
+  let spot = hsl(range ? range[0] + rng() * (range[1] - range[0]) : h + off, 0.55 + rng() * 0.35, 0.4 + rng() * 0.18);
   const [sh, ss, sl] = rgbToHsl(spot); spot = push(sh, ss, sl, bg, 3.1, bgDark);
   return { bg: rgbToHex(bg), ink: rgbToHex(ink), accent: rgbToHex(spot), name: "Rolled" };
 }
@@ -133,8 +146,10 @@ function moodsOf(p) {
   if (L < 0.06) out.push("dark"); else if (L > 0.45) out.push("light"); else out.push("bold");
   if (bs < 0.12 && (as < 0.15 || L < 0.06 || L > 0.45)) out.push("mono");
   const warm = (h, s) => s > 0.2 && (h < 60 || h > 330), cool = (h, s) => s > 0.2 && h > 165 && h < 280;
-  if (warm(bh, bs) || (bs < 0.25 && warm(ah, as))) out.push("warm");
-  if (cool(bh, bs) || (bs < 0.25 && cool(ah, as))) out.push("cool");
+  // a warm (cool) palette keeps its spot warm (cool) or neutral too: no cyan title on a maroon ground under "Warm"
+  const spotOk = (k) => as < 0.15 || hueIn(ah, SPOT_RANGE[k]);
+  if ((warm(bh, bs) || (bs < 0.25 && warm(ah, as))) && spotOk("warm")) out.push("warm");
+  if ((cool(bh, bs) || (bs < 0.25 && cool(ah, as))) && spotOk("cool")) out.push("cool");
   return out;
 }
 const MOODS = ["any", "dark", "light", "bold", "mono", "warm", "cool"];
@@ -163,18 +178,45 @@ const FINE = new Set(["Italiana", "Instrument Serif", "Cormorant Garamond", "Maj
 const TITLE_BASE = { upper: 56, centre: 68, lower: 81.5 };
 const titleBottom = (s) => (TITLE_BASE[s.titlePos] ?? 68) + (s.titleDy || 0);
 
+const sideways = (s) => s.titleRotate === "up" || s.titleRotate === "down";
 function titleEst(s) {
   const lines = String(s.title || "").split("\n").map(l => l.trim()).filter(Boolean);
   if (!lines.length) return null;
-  const k = (FONT[s.font] || {}).k || 1, cs = s.titleCase || "upper";
+  const k = (FONT[s.font] || {}).k || 1, cs = s.titleCase || "upper", tr = (s.tracking || 0) / 100, lead = s.leading / 100;
   const r = cs === "upper" ? adv(s.font, 0) : cs === "lower" ? adv(s.font, 1) : adv(s.font, 0) * 0.25 + adv(s.font, 1) * 0.75;
   let size = 19 * (s.titleSize / 100) * k;
-  const n = Math.max(...lines.map(l => [...l].length)), per = r / k + (s.tracking || 0) / 100, maxW = 100 - 2 * s.margin;
-  let w = size * (n * per - (s.tracking || 0) / 100);
+  const lens = lines.map(l => [...l].length), n = Math.max(...lens), per = r / k + tr, maxW = 100 - 2 * s.margin;
+  const em = (c) => Math.max(0.5, c * per - tr), fitted = s.titleStyle === "fitted";
+  const descOf = (z) => cs !== "upper" && /[gjpqy,]/.test(lines[lines.length - 1].toLowerCase()) ? z * 0.24 : z * 0.05;
+  // fitted lines each fill the measure: the block's height is the sum of the lines
+  const stack = (meas, cap) => {
+    let sz = lens.map(c => Math.min(cap, meas / em(c)));
+    const hOf = () => sz.reduce((t, z) => t + z * 0.72, 0) + sz.slice(1).reduce((t, z, i) => t + Math.min(z, sz[i]) * Math.max(0.07, lead - 0.72, cs === "upper" ? 0 : 0.27), 0);
+    return { sz, h: hOf() };
+  };
+  const above = s.titleStyle === "echo" ? size * 0.5 : s.titleStyle === "block" ? size * 0.1 : s.titleStyle === "knockout" ? size * 0.17 : 0;
+  if (sideways(s)) {
+    const run = 100 - 2 * s.margin;
+    let sz, th;
+    if (fitted) { const st = stack(run * Math.min(1, s.titleSize / 100), 42); sz = Math.min(...st.sz); th = st.h; }
+    else { sz = size; if (sz * em(n) > run) sz = run / em(n); th = sz * lead * (lines.length - 1) + sz * 0.74 + descOf(sz); }
+    if (th > 42) { sz *= 42 / th; th = 42; }
+    return { size: sz, w: th, h: run, desc: 0, above: 0, lines: lines.length, side: true };
+  }
+  if (s.titleBleed) {
+    const reach = (s.titleAlign || s.align) === "centre" ? 100 : 100 - s.margin, f = Math.max(1.04, 1.14 * s.titleSize / 100);
+    let w = reach * f;
+    if (fitted) { const st = stack(w, 42); return { size: Math.min(...st.sz), w, h: st.h, desc: descOf(st.sz[st.sz.length - 1]), above, lines: lines.length, bleed: true }; }
+    size = w / em(n);
+    let h = size * lead * (lines.length - 1) + size * 0.72;
+    if (h > 80) { size *= 80 / h; w *= 80 / h; h = 80; }
+    return { size, w, h, desc: descOf(size), above, lines: lines.length, bleed: true };
+  }
+  if (fitted) { const w = maxW * Math.min(1, s.titleSize / 100), st = stack(w, 42); return { size: Math.min(...st.sz), w, h: st.h, desc: descOf(st.sz[st.sz.length - 1]), above, lines: lines.length }; }
+  let w = size * (n * per - tr);
   if (w > maxW) { size *= maxW / w; w = maxW; }
-  const h = size * (s.leading / 100) * (lines.length - 1) + size * 0.72;
-  const desc = cs !== "upper" && /[gjpqy,]/.test(lines[lines.length - 1].toLowerCase()) ? size * 0.24 : size * 0.05;
-  return { size, w, h, desc, above: s.titleStyle === "echo" ? size * 0.5 : s.titleStyle === "block" ? size * 0.1 : 0, lines: lines.length };
+  const h = size * lead * (lines.length - 1) + size * 0.72;
+  return { size, w, h, desc: descOf(size), above, lines: lines.length };
 }
 const artistH = (s) => 2.95 * s.artistSize / 100;
 function artistW(s) {
@@ -184,15 +226,23 @@ function artistW(s) {
 }
 const motifH = (s) => s.motifKind === "none" || !s.count ? 0 : 5 * s.motifSize / 100;
 const motifW = (s) => (s.count - 1) * 2.32 * s.motifPitch / 100 + 1.05 * (s.motifSize / 100) * 1.6;
-const xAt = (s, w, al) => al === "centre" ? (100 - w) / 2 : al === "right" ? 100 - s.margin - w : s.margin;
+const xAt = (s, w, al) => al === "centre" ? (100 - w) / 2 : al === "right" ? 100 - s.margin - w : s.margin, xAtM = xAt;
 const R = (x, y, w, h) => ({ x, y, w, h });
 const overlap = (a, b, pad = 0) => !a || !b ? 0 :
   Math.max(0, Math.min(a.x + a.w, b.x + b.w) + pad - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) + pad - Math.max(a.y, b.y));
 /* Approximate boxes of every text element, in sleeve percent. */
 function rects(s) {
   const out = {}, t = titleEst(s), al = (el) => s[el + "Align"] || s.align;
-  if (t) { const tb = titleBottom(s); out.title = R(xAt(s, t.w, al("title")), tb - t.h - t.above, t.w, t.h + t.above + t.desc); }
-  const a = artistH(s), aw = artistW(s);
+  // a sideways title owns a strip down one edge; the other words keep to the column beside it (as the renderer does)
+  let ml = s.margin, mr = s.margin;
+  if (t && t.side) {
+    const up = s.titleRotate === "up", x = (up ? s.margin : 100 - s.margin - t.w) + (s.titleX || 0);
+    out.title = R(x, s.margin, t.w, t.h);
+    if (up) ml = x + t.w + 4; else mr = 100 - x + 4;
+  } else if (t) { const tb = titleBottom(s); out.title = R(xAtM(s, t.w, al("title")), tb - t.h - t.above, t.w, t.h + t.above + t.desc); }
+  const side = ml !== s.margin || mr !== s.margin;
+  const xAt = (s, w, a) => !side ? xAtM(s, w, a) : a === "centre" ? (ml + 100 - mr - w) / 2 : a === "right" ? 100 - mr - w : ml;
+  const a = artistH(s), aw = Math.min(artistW(s), 100 - ml - mr);
   if (aw) {
     if (s.artistRotate === "left" || s.artistRotate === "right") {
       const x = s.artistRotate === "left" ? s.margin * 0.62 : 100 - s.margin * 0.62 - a;
@@ -202,15 +252,15 @@ function rects(s) {
   }
   if (String(s.year || "").trim()) {
     const rot = s.artistRotate === "left" || s.artistRotate === "right", aal = rot ? "centre" : al("artist");
-    out.year = R(aal === "right" ? s.margin : 100 - s.margin - 6, (rot ? 7 : s.artistY) - 1.4, 6, 1.8);
+    out.year = R(aal === "right" ? ml : 100 - mr - 6, (rot ? 7 : s.artistY) - 1.4, 6, 1.8);
   }
   const mh = motifH(s);
   if (mh) { const mw = motifW(s); out.motif = R(xAt(s, mw, al("motif")), s.motifY, mw, mh); }
   if (String(s.footer || "").trim()) {
-    const fs = 1.72 * s.footerSize / 100, fw = Math.min(100 - 2 * s.margin, [...s.footer].length * fs * (0.62 + s.footerTrack / 100));
+    const fs = 1.72 * s.footerSize / 100, fw = Math.min(100 - ml - mr, [...s.footer].length * fs * (0.62 + s.footerTrack / 100));
     out.footer = R(xAt(s, fw, al("footer")), s.footerY - fs, fw, fs * 1.3);
   }
-  if (s.barcode) { const bw = 17.5 * (s.barcodeSize || 100) / 100; out.barcode = R(100 - s.margin - bw, 93.5 - 8.5 * (s.barcodeSize || 100) / 100, bw, 8.5 * (s.barcodeSize || 100) / 100); }
+  if (s.barcode) { const bw = 17.5 * (s.barcodeSize || 100) / 100; out.barcode = R(100 - mr - bw, 93.5 - 8.5 * (s.barcodeSize || 100) / 100, bw, 8.5 * (s.barcodeSize || 100) / 100); }
   return out;
 }
 
@@ -252,6 +302,7 @@ const textRgb = (s, which) => hexToRgb(s[which] === "accent" ? s.accent : s.ink)
 function picContrast(s, txt, dim) {
   const bg = hexToRgb(s.bg), eff = (dim / 100) * (s.imgMode === "bleed" ? 1 : 0.5);
   const ends = s.imgTone === "original" ? [[0, 0, 0], [255, 255, 255]] : [bg, hexToRgb(s.imgTone === "accent" ? s.accent : s.ink)];
+  if (s.imgEffect === "riso" && s.imgTone !== "original") ends.push(hexToRgb(s.imgTone === "accent" ? s.ink : s.accent));   // riso prints the other colour too
   return Math.min(...ends.map(e => contrast(txt, mixRgb(e, bg, eff))));
 }
 
@@ -327,7 +378,8 @@ function randomize(state, seed, locks = {}, opts = {}) {
     s.artistWeight = pick([600, 700, 700, 800]);
     s.artistTrack = s.artistCase === "upper" ? between(16, 44) : between(4, 14);
     s.artistSize = between(85, 130, 5);
-    s.titleStyle = dealt("titleStyle", FINE.has(s.font) ? deck([["solid", 6], ["shadow", 2], ["block", 2]]) : deck([["solid", 6], ["outline", 1], ["echo", 1], ["shadow", 2], ["block", 2]]));
+    s.titleStyle = dealt("titleStyle", FINE.has(s.font) ? deck([["solid", 6], ["shadow", 2], ["block", 2], ["split", 1], ["slant", 1], ["fitted", 1]])
+      : deck([["solid", 6], ["outline", 1], ["echo", 1], ["shadow", 2], ["block", 2], ["split", 1], ["stencil", 1], ["stripe", 1], ["knockout", 1], ["slant", 1], ["fitted", 1]]));
     s.titleColor = chance(0.12) ? "accent" : "ink";
     s.titleCase = pick(F0.mono ? ["upper", "upper", "lower"] : ["upper", "upper", "upper", "title", "lower"]);
     const up = s.titleCase === "upper";
@@ -354,12 +406,14 @@ function randomize(state, seed, locks = {}, opts = {}) {
   }
   if (FONT[s.font] && FONT[s.font].mono && !hard.type) s.tracking = Math.max(-2, Math.min(2, s.tracking));
 
-  if (!locks.layout) layout(s, rnd, pick, between, chance);
+  if (!locks.layout) layout(s, rnd, pick, between, chance, dealt);
   if (!locks.picture) {
     s.imgMode = dealt("imgMode", deck([["bleed", 7], ["panel", 2], ["band", 1], ["circle", 1], ["split", 1], ["inset", 1], ["top", 1], ["arch", 1]]));
     s.imgTone = pick(["ink", "ink", "accent", "original"]); s.dim = s.imgMode === "bleed" ? between(35, 70) : between(0, 40);
     s.imgPosterize = chance(0.18) ? between(2, 5) : 0; s.imgContrast = between(90, 140, 5);
     s.imgBlur = chance(0.15) ? between(6, 30) : 0;
+    s.imgEffect = dealt("imgEffect", deck([["none", 7], ["halftone", 1], ["riso", 1], ["grain", 1], ["photocopy", 1], ["dither", 1], ["scanlines", 1]]));
+    if (["halftone", "dither", "photocopy"].includes(s.imgEffect)) s.imgPosterize = 0;   // already two-level
     s.imgBoxSize = 100; s.imgBoxX = 0; s.imgBoxY = 0;
     placePicture(s, rnd, pick, between, chance, hard);
   }
@@ -407,20 +461,26 @@ function randomize(state, seed, locks = {}, opts = {}) {
 }
 
 /* ---------- layout: a preset with some play, or a freeform stack ---------- */
-function layout(s, rnd, pick, between, chance) {
+/* Presets as dealt: the familiar ones a little more often than the special ones. */
+const LAYOUT_DECK = deck([["classic", 2], ["centred", 2], ["right", 1], ["poster", 2], ["quiet", 1], ["flipped", 1], ["stacked", 1],
+  ["giant", 1], ["corner", 1], ["spine", 1], ["lowband", 1], ["topheavy", 1]]);
+function layout(s, rnd, pick, between, chance, dealt) {
   s.titleAlign = s.artistAlign = s.footerAlign = s.motifAlign = ""; s.titleX = s.artistX = s.footerX = s.motifX = 0;
+  s.titleBleed = false; s.titleRotate = "none";
   s.artistRotate = chance(0.1) ? pick(["left", "right"]) : "none";
   const rotated = s.artistRotate !== "none";
   s.footerPos = !rotated && chance(0.15) ? "top" : "bottom";
   if (chance(0.55)) {
-    const name = pick(Object.keys(LAYOUTS)), L = LAYOUTS[name]; LAYOUT_KEYS.forEach(k => { s[k] = L[k]; });
+    const name = (dealt || ((k, l) => pick(l)))("layout", LAYOUT_DECK.filter(n => LAYOUTS[n])), L = LAYOUTS[name]; LAYOUT_KEYS.forEach(k => { if (k in L) s[k] = L[k]; });
+    if (s.titleRotate !== "none") { s.artistRotate = "none"; if (chance(0.45)) s.titleRotate = "down"; }
+    if (["corner", "lowband", "topheavy"].includes(name) && chance(0.3)) s.align = "right";   // (a giant title cropped on the left loses its first letters)
     s.margin = Math.max(7, Math.min(15, L.margin + between(-2, 3)));
     s.titleSize = Math.round(L.titleSize * between(88, 114) / 100); s.titleDy += between(-3, 3);
     if (L.artistY < 30) { const d = between(-2, 3, 0.5); s.artistY += d; s.motifY += d; }
     if (s.footerPos === "top") s.footerY = between(5.5, 7.5, 0.5); else s.footerY = Math.max(L.footerY, between(91.5, 95, 0.5));
   } else freeform(s, rnd, pick, between, chance);
   if (FONT[s.font] && FONT[s.font].mono) s.titleSize = Math.min(s.titleSize, 110);
-  if (chance(0.16)) s.artistAlign = s.motifAlign = pick(["left", "centre", "right"].filter(a => a !== s.align));
+  if (chance(0.16) && !s.titleBleed) s.artistAlign = s.motifAlign = pick(["left", "centre", "right"].filter(a => a !== s.align));
   if (chance(0.12)) s.footerAlign = pick(["left", "centre", "right"]);
 }
 
@@ -523,7 +583,12 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
   // Title: clear of whatever sits below it, and of the barcode.
   if (!hard.layout) {
     const t = titleEst(s);
-    if (t) {
+    if (t && t.side) {
+      // sideways: the marks must fit the column beside the strip
+      const r0 = rects(s), col = s.titleRotate === "up" ? 100 - s.margin - (r0.title.x + r0.title.w + 4) : r0.title.x - 4 - s.margin;
+      if (!hard.motif) while (s.count > 3 && motifH(s) && motifW(s) > col) s.count--;
+      if (col < 30 && s.titleSize > 60) s.titleSize = Math.max(60, Math.round(s.titleSize * 0.8));
+    } else if (t) {
       const tb = titleBottom(s), below = [];
       if (s.artistRotate === "none" && s.artistY > tb) below.push(s.artistY - a * 0.8);
       if (m && s.motifY > tb) below.push(s.motifY);
@@ -557,9 +622,13 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
     else if (s.align !== free && !hard.picture && s.align !== "centre") s.imgBoxX = s.align === "left" ? 50 : 0;
   }
   // Outline and echo need size to read.
-  if (!hard.type && ["outline", "echo"].includes(s.titleStyle)) { const t = titleEst(s); if (t && t.size < 8.5) s.titleStyle = "solid"; }
+  if (!hard.type && ["outline", "echo", "stripe", "stencil"].includes(s.titleStyle)) { const t = titleEst(s); if (t && t.size < 8.5) s.titleStyle = "solid"; }
+  // cut and striped letters need capitals: lower case breaks up into noise
+  if (!hard.type && ["stripe", "stencil"].includes(s.titleStyle) && s.titleCase !== "upper") s.titleStyle = "solid";
+  if (!hard.type && ["knockout", "split"].includes(s.titleStyle)) { const t = titleEst(s); if (t && t.size < 5.5) s.titleStyle = "solid"; }
   const r = rects(s);
-  const titleCols = () => [textRgb(s, "titleColor")].concat(s.titleAccent && r.title && titleEst(s).lines > 1 ? [hexToRgb(s.accent)] : []);
+  const titleCols = () => [textRgb(s, "titleColor")].concat(s.titleAccent && r.title && titleEst(s).lines > 1 ? [hexToRgb(s.accent)] : [])
+    .concat(s.titleStyle === "split" ? [hexToRgb(s.titleColor === "accent" ? s.ink : s.accent)] : []);   // split's lower half is the other colour
   // Backdrop shape behind the title must not swallow it.
   if (!hard.backdrop && s.shape !== "none" && r.title) {
     const bg = hexToRgb(s.bg), rad = s.shapeSize / 2;
@@ -596,7 +665,7 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
   // Pattern behind type: keep it quiet where the words are (loudness = strength × how busy it is).
   if (!hard.backdrop && s.pattern !== "none") {
     const P0 = patternList().find(x => x.id === s.pattern), busy = P0 ? P0.busy ?? 0.5 : 0.5;
-    const area = patternRect(s), hollow = ["outline", "echo"].includes(s.titleStyle);
+    const area = patternRect(s), hollow = ["outline", "echo", "stripe", "stencil", "knockout"].includes(s.titleStyle);
     const under = (q) => q && (s.patternArea === "shape" ? overlap(R(s.shapeX - s.shapeSize / 2, s.shapeY - s.shapeSize / 2, s.shapeSize, s.shapeSize), q) : area.some(a => overlap(a, q)));
     const titlePlated = s.plates === "all" || s.plates === "title", allPlated = s.plates === "all";
     const loudTitle = r.title && under(r.title) && s.titleStyle !== "block" && !titlePlated;
@@ -611,7 +680,7 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
     const needs = () => {
       const n = [];
       if (r.title && s.titleStyle !== "block" && overlap(box, r.title)) {
-        const t = titleEst(s), want = (["outline", "echo"].includes(s.titleStyle) ? 4 : t.size < 9 ? 3.5 : 3) + (FINE.has(s.font) ? 0.7 : 0);
+        const t = titleEst(s), want = (["outline", "echo", "stripe", "stencil"].includes(s.titleStyle) ? 4 : t.size < 9 ? 3.5 : 3) + (FINE.has(s.font) ? 0.7 : 0);
         titleCols().forEach(c => n.push([c, want]));
       }
       if (r.artist && overlap(box, r.artist)) n.push([textRgb(s, "artistColor"), 3.5]);
@@ -692,12 +761,12 @@ const GROUP_KEYS = {
   type: ["font", "bodyFont", "artistFont", "artistCase", "artistColor", "artistWeight", "artistTrack", "artistSize", "titleStyle", "titleColor", "titleCase",
     "leading", "tracking", "titleAccent", "footerColor", "footerOpacity", "footerSize", "footerTrack", "footerCase"],
   layout: ["align", "margin", "artistY", "motifY", "titlePos", "titleDy", "titleSize", "footerY", "footerPos", "titleAlign", "artistAlign", "footerAlign", "motifAlign",
-    "titleX", "artistX", "footerX", "motifX", "artistRotate"],
+    "titleX", "artistX", "footerX", "motifX", "artistRotate", "titleBleed", "titleRotate"],
   motif: ["motifKind", "motifSize", "motifPitch", "count", "missing", "missingStyle"],
   border: ["frame", "frameStyle", "frameInset", "frameWidth", "frameOpacity", "frameColor", "barcodeStyle"],
   backdrop: ["plates", "wash", "washAmt", "shape", "shapeAmt", "shapeSize", "shapeX", "shapeY", "shapeColor", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale",
     "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed", "texture", "textureAmt", "grain", "vignette"],
-  picture: ["imgMode", "imgTone", "dim", "imgPosterize", "imgContrast", "imgBlur", "imgBoxSize", "imgBoxX", "imgBoxY"],
+  picture: ["imgMode", "imgTone", "dim", "imgPosterize", "imgContrast", "imgBlur", "imgBoxSize", "imgBoxX", "imgBoxY", "imgEffect"],
 };
 /* A saved look with the locked groups taken from `mine` instead. */
 function keepMine(look, mine, locks) {

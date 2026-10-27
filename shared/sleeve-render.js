@@ -16,6 +16,8 @@ const SLEEVE_DEFAULTS = {
   texture: "none", textureAmt: 45,
   // layout
   align: "left", margin: 11, artistY: 15.8, motifY: 20.6, footerY: 92.2, footerPos: "bottom",
+  titleBleed: false,     // the title runs past the margin and is cropped by the sleeve edge
+  titleRotate: "none",   // none | up (reads bottom to top up the left edge) | down (top to bottom down the right edge)
   // motif
   motifKind: "bars", count: 9, missing: 9, missingStyle: "outline", motifSize: 100, motifPitch: 100,
   // type
@@ -28,12 +30,19 @@ const SLEEVE_DEFAULTS = {
   motifAlign: "", motifX: 0,
   // image
   imgMode: "bleed", imgTone: "ink", imgBoxX: 0, imgBoxY: 0, imgBoxSize: 100, dim: 60, zoom: 100, shiftX: 0, shiftY: 0, imgBlur: 0, imgContrast: 100, imgPosterize: 0,
+  imgEffect: "none",     // print treatment of the toned picture: see IMG_EFFECTS
   // record label mark (name from release.label, logo is a separate shared image)
   labelMark: "none", labelX: 86, labelY: 90.5, labelSize: 100, labelColor: "ink", labelOpacity: 85, logoMode: "tint",
   // catalogue
   plate: false, platePos: "tr", plateText: "", barcode: false, barcodeDigits: "", barcodeStyle: "box", barcodeSize: 100,
   exportSize: "3000",
 };
+/* Option lists for the editor's pickers: [id, name]. */
+const TITLE_STYLES = [["solid", "Solid"], ["outline", "Outline"], ["shadow", "Shadow"], ["echo", "Echo"], ["block", "Block"],
+  ["split", "Split"], ["stencil", "Stencil"], ["stripe", "Stripe"], ["knockout", "Knockout"], ["slant", "Slant"], ["fitted", "Fitted"]];
+const IMG_EFFECTS = [["none", "None"], ["halftone", "Halftone"], ["riso", "Riso"], ["grain", "Grain"], ["photocopy", "Photocopy"], ["dither", "Dither"],
+  ["scanlines", "Scanlines"]];
+const TITLE_ROTATES = [["none", "Across"], ["up", "Up the left"], ["down", "Down the right"]];
 const RELEASE_KEYS = ["artist", "title", "footer", "catalog", "year", "label"];
 const PALETTE_KEYS = ["bg", "ink", "accent"];
 
@@ -89,7 +98,8 @@ function toned(image, state) {
   if (!image) return null;
   if (!imageIds.has(image)) imageIds.set(image, ++imageSeq);
   const blur = state.imgBlur || 0, con = state.imgContrast ?? 100, post = state.imgPosterize || 0;
-  const key = [imageIds.get(image), state.imgTone, state.bg, state.ink, state.accent, blur, con, post].join("|");
+  const fx = FX.has(state.imgEffect) ? state.imgEffect : "";
+  const key = [imageIds.get(image), state.imgTone, state.bg, state.ink, state.accent, blur, con, post, fx].join("|");
   if (tonedCache.key === key) return tonedCache.canvas;
   const cap = 2400;
   const iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
@@ -105,7 +115,8 @@ function toned(image, state) {
   g.filter = "none";
   const lv = post >= 2 ? post : 0;
   const q = (t) => lv ? Math.round(t * (lv - 1)) / (lv - 1) : t;
-  if (state.imgTone !== "original" || lv) {
+  if (fx) { try { effect(c, g, w, h, state, fx, q); } catch (e) { console.error(e); } }
+  else if (state.imgTone !== "original" || lv) {
     const id = g.getImageData(0, 0, w, h); const d = id.data;
     if (state.imgTone !== "original") {
       const a = hexToRgb(state.bg), b = hexToRgb(state.imgTone === "accent" ? state.accent : state.ink);
@@ -126,6 +137,108 @@ function toned(image, state) {
   tonedCache = { key, canvas: c };
   return c;
 }
+/* ---------- picture effects: print treatments applied while toning ----------
+   Sizes are a share of the picture, so a 600 px thumbnail and a 2400 px export look alike. */
+const FX = new Set(IMG_EFFECTS.map(e => e[0]).filter(e => e !== "none"));
+let noiseTab = null;
+function noise() {
+  if (noiseTab) return noiseTab;
+  const r = SP.mulberry32(0x9E3779B9), a = new Uint8Array(65536);
+  for (let i = 0; i < a.length; i++) a[i] = r() * 256;
+  return (noiseTab = a);
+}
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(v => (v + 0.5) / 16);
+/* The tone's two ends: the ground and the tone colour; `cov` turns a brightness into how much tone colour prints. */
+function toneEnds(st) {
+  const paper = hexToRgb(st.bg), plate = hexToRgb(st.imgTone === "accent" ? st.accent : st.ink);
+  const other = hexToRgb(st.imgTone === "accent" ? st.ink : st.accent);
+  const light = lum(plate) > lum(paper);
+  return { paper, plate, other, cov: light ? (t) => t : (t) => 1 - t };
+}
+function effect(c, g, w, h, st, fx, q) {
+  if (fx === "halftone") return halftone(c, g, w, h, st, q);
+  pixels(g, w, h, st, fx, q);
+}
+/* Per-pixel treatments, table-driven so a 1200 px picture stays well under the frame budget.
+   "original" keeps colour for grain, scanlines and riso; photocopy and dither are two-colour, so they use the ink tone. */
+function pixels(g, w, h, st, fx, q) {
+  const id = g.getImageData(0, 0, w, h), d = id.data, M = Math.max(w, h);
+  const keep = st.imgTone === "original" && (fx === "grain" || fx === "scanlines" || fx === "riso");
+  const E = toneEnds(st.imgTone === "original" ? { ...st, imgTone: "ink" } : st), P = E.paper, Q = E.plate, O = E.other;
+  const NZ = noise(), u = Math.max(1, Math.round(M / 700)), ud = Math.max(1, Math.round(M / 170));
+  const per = Math.max(3, Math.round(M / 210)), dark = Math.round(per * 0.42), off = Math.max(1, Math.round(M / 240));
+  // brightness (0..255) → normalised, posterized tone; tone (0..255) → output colour
+  const N = new Float32Array(256), R = new Uint8ClampedArray(256), G = new Uint8ClampedArray(256), B = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) {
+    const t = v / 255; N[v] = q(t < 0.08 ? 0 : t > 0.92 ? 1 : (t - 0.08) / 0.84);
+    const c = E.cov(t); R[v] = P[0] + (Q[0] - P[0]) * c; G[v] = P[1] + (Q[1] - P[1]) * c; B[v] = P[2] + (Q[2] - P[2]) * c;
+  }
+  const cx = new Int32Array(w), cxd = new Int32Array(w); for (let x = 0; x < w; x++) { cx[x] = (x / u) & 255; cxd[x] = (x / ud) & 3; }
+  const L = (i) => (d[i] * 54 + d[i + 1] * 183 + d[i + 2] * 19) >> 8;
+  if (keep) {
+    const src = fx === "riso" ? new Uint8ClampedArray(d) : null;
+    for (let y = 0; y < h; y++) {
+      const ny = ((y / u) & 255) << 8, mul = fx === "scanlines" ? (y % per < dark ? 0.38 : 1.1) : 1, yb = Math.min(h - 1, y + off);
+      for (let x = 0, i = y * w * 4; x < w; x++, i += 4) {
+        const n = NZ[ny | cx[x]] - 128;
+        if (fx === "riso") {
+          // the plates slightly out of register, with a grainy ink lay-down
+          const g2 = n * 0.3; d[i] = src[(y * w + Math.min(w - 1, x + off)) * 4] + g2; d[i + 1] = src[i + 1] + g2; d[i + 2] = src[(yb * w + x) * 4 + 2] + g2;
+        } else if (fx === "grain") { const a = n * 0.55; d[i] += a; d[i + 1] += a; d[i + 2] += a; }
+        else { d[i] *= mul; d[i + 1] *= mul; d[i + 2] *= mul; }
+      }
+    }
+    g.putImageData(id, 0, 0); return;
+  }
+  let T = null;
+  if (fx === "riso") { T = new Uint8Array(w * h); for (let i = 0, j = 0; j < T.length; i += 4, j++) T[j] = N[L(i)] * 255; }
+  for (let y = 0; y < h; y++) {
+    const ny = ((y / u) & 255) << 8, line = y % per < dark, yd = ((y / ud) & 3) << 2, ry = Math.max(0, y - off) * w;
+    for (let x = 0, i = y * w * 4; x < w; x++, i += 4) {
+      let t = T ? T[y * w + x] / 255 : N[L(i)];
+      const n = NZ[ny | cx[x]] / 255 - 0.5;
+      if (fx === "grain") t += n * 0.36;
+      else if (fx === "photocopy") { t += n * 0.16; t = t < 0.44 ? 0 : t > 0.56 ? 1 : (t - 0.44) / 0.12; }
+      else if (fx === "dither") t = t > BAYER[cxd[x] + yd] ? 1 : 0;
+      else if (fx === "scanlines") t = line ? t * 0.3 : t * 1.12;
+      if (T) {
+        // riso: the tone colour carries the picture (grainy), the other colour sits in the mid-tones, off register
+        t += n * 0.3;
+        let c2 = 1 - Math.abs(E.cov(T[ry + Math.max(0, x - off)] / 255) - 0.5) * 2.3 + (NZ[(ny | cx[x]) ^ 0x5A5A] / 255 - 0.5) * 0.5;
+        c2 = c2 < 0 ? 0 : c2 > 1 ? 0.78 : c2 * 0.78;
+        const k = t < 0 ? 0 : t > 1 ? 255 : (t * 255) | 0, r0 = R[k], g0 = G[k], b0 = B[k];
+        d[i] = r0 + (O[0] - r0) * c2; d[i + 1] = g0 + (O[1] - g0) * c2; d[i + 2] = b0 + (O[2] - b0) * c2;
+        continue;
+      }
+      const k = t < 0 ? 0 : t > 1 ? 255 : (t * 255) | 0;
+      d[i] = R[k]; d[i + 1] = G[k]; d[i + 2] = B[k];
+    }
+  }
+  g.putImageData(id, 0, 0);
+}
+/* A 45° dot screen: tone-colour dots on the ground, dot area following the picture. */
+function halftone(c, g, w, h, st, q) {
+  const M = Math.max(w, h), cell = Math.max(3, M / 92);
+  const sw = Math.max(1, Math.ceil(w / cell * 2)), sh = Math.max(1, Math.ceil(h / cell * 2));
+  const sm = document.createElement("canvas"); sm.width = sw; sm.height = sh;
+  const sg = sm.getContext("2d", { willReadFrequently: true }); sg.imageSmoothingQuality = "high"; sg.drawImage(c, 0, 0, sw, sh);
+  const sd = sg.getImageData(0, 0, sw, sh).data;
+  const E = toneEnds(st.imgTone === "original" ? { ...st, imgTone: "ink" } : st);
+  g.fillStyle = rgba(E.paper, 1); g.fillRect(0, 0, w, h); g.fillStyle = rgba(E.plate, 1);
+  const a = Math.PI / 4, ca = Math.cos(a) * cell, sa = Math.sin(a) * cell, N = Math.ceil((w + h) / cell) + 2, kx = sw / w, ky = sh / h;
+  g.beginPath();
+  for (let i = -N; i <= N; i++) for (let j = -N; j <= N; j++) {
+    const x = i * ca - j * sa, y = i * sa + j * ca;
+    if (x < -cell || y < -cell || x > w + cell || y > h + cell) continue;
+    const si = (Math.min(sh - 1, Math.max(0, (y * ky) | 0)) * sw + Math.min(sw - 1, Math.max(0, (x * kx) | 0))) * 4;
+    let t = (0.2126 * sd[si] + 0.7152 * sd[si + 1] + 0.0722 * sd[si + 2]) / 255;
+    t = q(t < 0.08 ? 0 : t > 0.92 ? 1 : (t - 0.08) / 0.84);
+    const cv = E.cov(t); if (cv < 0.02) continue;
+    const r = cell * 0.6 * Math.sqrt(cv);
+    g.moveTo(x + r, y); g.arc(x, y, r, 0, Math.PI * 2);
+  }
+  g.fill();
+}
 /* Fills (x,y,w,h) with the image: zoom 100 covers the box, below 100 it floats smaller on the ground.
    shiftX/shiftY move it by a share of the box, so dragging feels the same at every zoom. */
 function drawCover(ctx, img, x, y, w, h, state, clipPath) {
@@ -137,6 +250,7 @@ function drawCover(ctx, img, x, y, w, h, state, clipPath) {
   ctx.save(); ctx.beginPath();
   if (clipPath) clipPath(ctx); else ctx.rect(x, y, w, h);
   ctx.clip();
+  if (state.imgEffect && state.imgEffect !== "none") ctx.imageSmoothingQuality = "high";   // screens and dither alias when shrunk
   ctx.drawImage(img, dx, dy, dw, dh);
   ctx.restore();
 }
@@ -414,6 +528,45 @@ function drawFrame(ctx, W, H, st, ink, spot) {
       for (let y = inset; y < H - inset - hh; y += pitch) { ctx.fillRect(inset - hw, y, hw, hh); ctx.fillRect(W - inset, y, hw, hh); }
       ctx.beginPath(); ctx.moveTo(inset + lw, 0); ctx.lineTo(inset + lw, H); ctx.moveTo(W - inset - lw, 0); ctx.lineTo(W - inset - lw, H); ctx.stroke(); break;
     }
+    case "ticket": {
+      // a box with each corner bitten out, like a cloakroom ticket
+      const r = S * 0.032, x0 = inset, y0 = inset, x1 = W - inset, y1 = H - inset, P = Math.PI;
+      ctx.beginPath(); ctx.moveTo(x0 + r, y0); ctx.lineTo(x1 - r, y0); ctx.arc(x1, y0, r, P, P / 2, true);
+      ctx.lineTo(x1, y1 - r); ctx.arc(x1, y1, r, P * 1.5, P, true); ctx.lineTo(x0 + r, y1); ctx.arc(x0, y1, r, 0, -P / 2, true);
+      ctx.lineTo(x0, y0 + r); ctx.arc(x0, y0, r, P / 2, 0, true); ctx.closePath(); ctx.stroke();
+      break;
+    }
+    case "perforated": {
+      // a row of punched holes round the sleeve, evenly spaced from corner to corner
+      const rr = Math.max(0.8, S * 0.0026 * Math.sqrt(st.frameWidth / 100)), pitch = S * 0.0125;
+      ctx.fillStyle = rgba(col, st.frameOpacity / 100); ctx.beginPath();
+      const side = (xa, ya, xb, yb, first) => {
+        const n = Math.max(1, Math.round(Math.hypot(xb - xa, yb - ya) / pitch));
+        for (let i = first ? 0 : 1; i < n; i++) { const x = xa + (xb - xa) * i / n, y = ya + (yb - ya) * i / n; ctx.moveTo(x + rr, y); ctx.arc(x, y, rr, 0, Math.PI * 2); }
+      };
+      const x0 = inset, y0 = inset, x1 = W - inset, y1 = H - inset;
+      side(x0, y0, x1, y0, true); side(x1, y0, x1, y1, true); side(x1, y1, x0, y1, true); side(x0, y1, x0, y0, true);
+      ctx.fill(); break;
+    }
+    case "bracket": {
+      // [ ] down the two sides
+      const L = S * 0.05; ctx.lineWidth = lw * 1.6; ctx.lineCap = "butt"; ctx.beginPath();
+      for (const [x, dx] of [[inset, 1], [W - inset, -1]]) { ctx.moveTo(x + dx * L, inset); ctx.lineTo(x, inset); ctx.lineTo(x, H - inset); ctx.lineTo(x + dx * L, H - inset); }
+      ctx.stroke(); break;
+    }
+    case "registration": {
+      // printer's marks: crop ticks at the corners, a register target halfway down each side
+      const L = S * 0.03, o = S * 0.008, rr = S * 0.0095, arm = rr * 1.75;
+      ctx.beginPath();
+      for (const [x, y, dx, dy] of [[inset, inset, 1, 1], [W - inset, inset, -1, 1], [inset, H - inset, 1, -1], [W - inset, H - inset, -1, -1]]) {
+        ctx.moveTo(x - dx * o, y); ctx.lineTo(x - dx * (o + L), y); ctx.moveTo(x, y - dy * o); ctx.lineTo(x, y - dy * (o + L));
+      }
+      for (const x of [inset * 0.62, W - inset * 0.62]) {
+        const y = H / 2; ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y); ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm);
+        ctx.moveTo(x + rr, y); ctx.arc(x, y, rr, 0, Math.PI * 2);
+      }
+      ctx.stroke(); break;
+    }
     default: box(0);
   }
   ctx.restore();
@@ -516,6 +669,142 @@ function drawLabelMark(ctx, S, st, cx, cy, colour, faceName, logo) {
   return box;
 }
 
+/* ---------- title helpers ---------- */
+const capCache = {};
+/* Cap height as a share of the size, measured once the face is loaded. */
+function capRatio(ctx, fontName, face) {
+  if (capCache[fontName]) return capCache[fontName];
+  const f = `${weightFor(fontName, "700")} 100px ${face}`;
+  ctx.save(); ctx.font = f; const a = ctx.measureText("H").actualBoundingBoxAscent; ctx.restore();
+  const r = a ? Math.min(0.9, Math.max(0.5, a / 100)) : 0.72;
+  if (a && document.fonts.check(f)) capCache[fontName] = r;
+  return r;
+}
+/* Baselines of lines that each have their own size, relative to the last line's: each line clears the caps below it. */
+function stackOffsets(lines, sizes, lead, capR, tcase) {
+  const n = sizes.length, o = new Array(n).fill(0);
+  for (let i = n - 2; i >= 0; i--) {
+    const mn = Math.min(sizes[i], sizes[i + 1]), desc = tcase !== "upper" && /[gjpqy,;]/.test(lines[i]) ? sizes[i] * 0.22 : 0;
+    o[i] = o[i + 1] - sizes[i + 1] * capR - Math.max(mn * Math.max(0.07, lead - 0.72), desc + mn * 0.05);
+  }
+  return o;
+}
+/* A title set sideways: fitted to the run between the margins, as thick as its lines. Lines are placed in a frame whose
+   x runs along the strip (start = bottom for "up", top for "down") and whose y runs into the sleeve from the edge. */
+function sideTitle(ctx, st, lines, S, X, face, k) {
+  const trackEm = st.tracking / 100, lead = st.leading / 100, run = S - X * 2, fitted = st.titleStyle === "fitted";
+  const fnt = (z) => `${weightFor(st.font, "700")} ${z}px ${face}`;
+  let size = S * 0.19 * (st.titleSize / 100) * k;
+  ctx.save(); ctx.font = fnt(size);
+  const ems = lines.map(l => measureTracked(ctx, l, trackEm, size) / size), capR = capRatio(ctx, st.font, face);
+  const lowDesc = (i) => st.titleCase !== "upper" && /[gjpqy,;]/.test(lines[i]) ? 0.22 : 0.06;
+  let sizes;
+  if (fitted) sizes = ems.map(e => Math.min(S * 0.42, run * Math.min(1, st.titleSize / 100) / e));
+  else { const wd = Math.max(...ems); if (wd * size > run) size = run / wd; sizes = ems.map(() => size); }
+  const n = lines.length;
+  const layout = () => {
+    const offs = fitted ? stackOffsets(lines, sizes, lead, capR, st.titleCase) : sizes.map((z, i) => -(n - 1 - i) * z * lead);
+    return { offs, thick: -offs[0] + sizes[0] * 0.74 + sizes[n - 1] * lowDesc(n - 1) };
+  };
+  let L = layout();
+  if (L.thick > S * 0.42) { const f = S * 0.42 / L.thick; sizes = sizes.map(z => z * f); size *= f; L = layout(); }
+  if (fitted) size = Math.min(...sizes);
+  const al = st.titleAlign || "left", dx = S * (st.titleX || 0) / 100, y0 = sizes[0] * 0.74 - L.offs[0];
+  const placed = lines.map((l, i) => {
+    const font = fnt(sizes[i]); ctx.font = font;
+    const w = measureTracked(ctx, l, trackEm, sizes[i]), opt = sizes[i] * 0.035;
+    const x = al === "right" ? run - w + opt : al === "centre" ? (run - w) / 2 : -opt;
+    return { l, x, y: y0 + L.offs[i], w, size: sizes[i], font: ctx.font, i };
+  });
+  ctx.restore();
+  const up = st.titleRotate === "up";
+  return { size, placed, thick: L.thick, a: up ? -Math.PI / 2 : Math.PI / 2, tx: up ? X + dx : S - X + dx, ty: up ? S - X : X,
+    edge: up ? X + dx + L.thick : S - X + dx - L.thick, up };
+}
+/* A rectangle in a sideways title's frame, as a sleeve rectangle. */
+function sideRect(side, x, y, w, h) {
+  const pt = (u, v) => side.up ? [side.tx + v, side.ty - u] : [side.tx - v, side.ty + u];
+  const ps = [pt(x, y), pt(x + w, y), pt(x, y + h), pt(x + w, y + h)], xs = ps.map(p => p[0]), ys = ps.map(p => p[1]);
+  const x0 = Math.min(...xs), y0 = Math.min(...ys);
+  return { x: x0, y: y0, w: Math.max(...xs) - x0, h: Math.max(...ys) - y0 };
+}
+/* A scratch layer the size of the target with the same transform, for treatments that cut into the letters. */
+let scratch = null;
+function layerFor(ctx) {
+  const c = ctx.canvas;
+  if (!scratch) scratch = document.createElement("canvas");
+  if (scratch.width !== c.width || scratch.height !== c.height) { scratch.width = c.width; scratch.height = c.height; }
+  const g = scratch.getContext("2d");
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1; g.clearRect(0, 0, c.width, c.height);
+  g.setTransform(ctx.getTransform()); g.textBaseline = ctx.textBaseline;
+  return g;
+}
+function stampLayer(ctx, g) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(g.canvas, 0, 0); ctx.restore(); }
+const heightOf = (g, p, lower) => { g.font = p.font; return g.measureText(lower ? "x" : "H").actualBoundingBoxAscent || p.size * (lower ? 0.5 : 0.72); };
+const fillLines = (g, placed, o, col) => placed.forEach(p => { g.font = p.font; g.fillStyle = rgba(col || p.col, 1); drawTracked(g, p.l, p.x, p.y, o.trackEm, p.size); });
+/* The newer title treatments. Each returns { paint, box?, grow? }: box replaces the measured plate, grow widens it. */
+const TITLE_FX = {
+  // top half one colour, bottom half the other, meeting on a clean line through the middle of the letters
+  split(ctx, placed, o) {
+    const lower = o.st.titleCase === "lower";
+    return { paint() {
+      placed.forEach(p => {
+        const cut = p.y - heightOf(ctx, p, lower) * 0.5, big = p.size * 2, other = p.col === o.spot ? o.ink : o.spot;
+        ctx.save(); ctx.beginPath(); ctx.rect(p.x - big, cut - big * 2, p.w + big * 2, big * 2); ctx.clip();
+        ctx.fillStyle = rgba(p.col, 1); drawTracked(ctx, p.l, p.x, p.y, o.trackEm, p.size); ctx.restore();
+        ctx.save(); ctx.beginPath(); ctx.rect(p.x - big, cut, p.w + big * 2, big); ctx.clip();
+        ctx.fillStyle = rgba(other, 1); drawTracked(ctx, p.l, p.x, p.y, o.trackEm, p.size); ctx.restore();
+      });
+    } };
+  },
+  // a bridge cut clean through every letter, like a stencil plate
+  stencil(ctx, placed, o) {
+    const lower = o.st.titleCase === "lower";
+    return { paint() {
+      const g = layerFor(ctx); fillLines(g, placed, o);
+      g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
+      placed.forEach(p => { const h = heightOf(g, p, lower), t = Math.max(1.2, p.size * 0.055); g.fillRect(p.x - p.size, p.y - h * 0.52 - t / 2, p.w + p.size * 2, t); });
+      stampLayer(ctx, g);
+    } };
+  },
+  // letters made of horizontal lines, solid at the baseline and the cap line
+  stripe(ctx, placed, o) {
+    const lower = o.st.titleCase === "lower";
+    return { paint() {
+      const g = layerFor(ctx); fillLines(g, placed, o);
+      g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
+      placed.forEach(p => {
+        const h = heightOf(g, p, lower), n = Math.max(3, Math.round(h / (p.size * 0.11))), pitch = h / (n - 0.4), gap = pitch * 0.4;
+        for (let j = -5; j < n + 6; j++) g.fillRect(p.x - p.size, p.y - (j + 1) * pitch, p.w + p.size * 2, gap);
+      });
+      stampLayer(ctx, g);
+    } };
+  },
+  // letters cut out of one solid slab, so the ground or the picture shows through them
+  knockout(ctx, placed, o) {
+    const pad = o.size * 0.17, col = o.st.titleColor === "accent" ? o.spot : o.ink;
+    let left = Infinity, right = -Infinity, top = Infinity;
+    placed.forEach(p => { left = Math.min(left, p.x); right = Math.max(right, p.x + p.w); top = Math.min(top, p.y - heightOf(ctx, p, false)); });
+    const box = { left: left - pad, right: right + pad, top: top - pad, bot: placed[placed.length - 1].y + pad };
+    ctx.font = placed[placed.length - 1].font;
+    return { box, paint() {
+      const g = layerFor(ctx); g.fillStyle = rgba(col, 1); g.fillRect(box.left, box.top, box.right - box.left, box.bot - box.top);
+      g.globalCompositeOperation = "destination-out"; fillLines(g, placed, o, [0, 0, 0]);
+      stampLayer(ctx, g);
+    } };
+  },
+  // sheared to an italic from the baseline
+  slant(ctx, placed, o) {
+    const sh = 0.21;
+    return { grow: { l: 0, r: sh * o.size * 0.76, b: 0 }, paint() {
+      placed.forEach(p => {
+        ctx.save(); ctx.translate(p.x, p.y); ctx.transform(1, 0, -sh, 1, 0, 0);
+        ctx.font = p.font; ctx.fillStyle = rgba(p.col, 1); drawTracked(ctx, p.l, 0, 0, o.trackEm, p.size); ctx.restore();
+      });
+    } };
+  },
+};
+
 /* ---------- the sleeve ---------- */
 async function render(canvas, state, image, logo) {
   const st = state, S = canvas.width;
@@ -550,7 +839,13 @@ async function render(canvas, state, image, logo) {
 
   const X = S * st.margin / 100;
   const alignOf = (el) => st[el + "Align"] || st.align;
-  const ax = (w, el) => { const al = alignOf(el), dx = S * (st[el + "X"] || 0) / 100; return (al === "centre" ? (S - w) / 2 : al === "right" ? S - X - w : X) + dx; };
+  // A sideways title takes a strip down one edge; the other words keep to the column beside it (XL / XR are that column's margins).
+  const lines = st.title.split("\n").map(l => l.trim()).filter(Boolean).map(l => applyCase(l, st.titleCase));
+  const rot = lines.length && (st.titleRotate === "up" || st.titleRotate === "down") ? st.titleRotate : "";
+  const side = rot ? sideTitle(ctx, st, lines, S, X, faceStack(st.font), k) : null;
+  let XL = X, XR = X;
+  if (side) { if (rot === "up") XL = side.edge + S * 0.04; else XR = S - side.edge + S * 0.04; }
+  const ax = (w, el) => { const al = alignOf(el), dx = S * (st[el + "X"] || 0) / 100; return (al === "centre" ? (rot ? (XL + S - XR - w) / 2 : (S - w) / 2) : al === "right" ? S - XR - w : XL) + dx; };
   // Cut-out plates: a patch of ground behind words, so a loud pattern or shape can run underneath.
   // The words go on their own layer while plates are collected; plates are painted first, then the words on top,
   // so a plate can never cover a word drawn before it.
@@ -571,7 +866,7 @@ async function render(canvas, state, image, logo) {
   // Long names shrink to fit the sleeve, leaving room for the year when it shares the line.
   ctx.font = `${weightFor(bodyFace, "600")} ${S * 0.016}px ${bface}`;
   const yearW = st.year.trim() && !rotated ? measureTracked(ctx, st.year.toUpperCase(), 0.26, S * 0.016) + S * 0.025 : 0;
-  const artistRoom = rotated ? S - X : S - X * 2 - yearW * (alignOf("artist") === "centre" ? 2 : 1);
+  const artistRoom = rotated ? S - X : (rot ? S - XL - XR : S - X * 2) - yearW * (alignOf("artist") === "centre" ? 2 : 1);
   ctx.font = `${weightFor(artistFace, st.artistWeight || 700)} ${artistSize}px ${faceStack(artistFace)}`; ctx.fillStyle = rgba(colourOf(st.artistColor), 1);
   let aw = measureTracked(ctx, artistText, aTrack, artistSize);
   if (aw > artistRoom && aw > 0) {
@@ -597,7 +892,7 @@ async function render(canvas, state, image, logo) {
     const ys = S * 0.016, yt = st.year.toUpperCase();
     ctx.font = `${weightFor(bodyFace, "600")} ${ys}px ${bface}`; ctx.fillStyle = rgba(ink, 0.6);
     const w = measureTracked(ctx, yt, 0.26, ys), al = rotated ? "centre" : alignOf("artist");
-    const yx = al === "right" ? X : S - X - w, yy = rotated ? S * 0.07 : artistY;
+    const yx = al === "right" ? XL : S - XR - w, yy = rotated ? S * 0.07 : artistY;
     plate("year", yx, yy - ys * 0.8, w, ys * 0.95, ys * 0.55, ys * 0.4);
     drawTracked(ctx, yt, yx, yy, 0.26, ys);
   }
@@ -612,42 +907,82 @@ async function render(canvas, state, image, logo) {
   }
 
   // Title: bottom baseline from the preset plus a nudge; shrinks to fit width and the room above it.
-  const lines = st.title.split("\n").map(l => l.trim()).filter(Boolean).map(l => applyCase(l, st.titleCase));
   if (lines.length) {
-    const maxW = S - X * 2;
-    let size = S * 0.19 * (st.titleSize / 100) * k;
     const trackEm = st.tracking / 100, lead = st.leading / 100;
-    const bottom = ({ centre: 0.68, lower: 0.815, upper: 0.56 }[st.titlePos] + st.titleDy / 100) * S;
-    let topLimit = S * 0.08;
-    if (artistText && !rotated && artistY < bottom) topLimit = Math.max(topLimit, artistY + S * 0.102);
-    if (st.motifKind !== "none" && motifTop < bottom) topLimit = Math.max(topLimit, motifTop + motifH + S * 0.054);
-    ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
-    const widest = Math.max(...lines.map(l => measureTracked(ctx, l, trackEm, size) / size));
-    if (widest * size > maxW) size = maxW / widest;
-    const blockH = size * lead * (lines.length - 1) + size * 0.72;
-    if (bottom - blockH < topLimit) size *= Math.max(0.45, (bottom - topLimit) / blockH);
-    ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
-    const optical = size * 0.035, al = alignOf("title"), dx = S * (st.titleX || 0) / 100;
-    const style = st.titleStyle || "solid", main = colourOf(st.titleColor);
-    let bx0 = Infinity, bx1 = -Infinity;
-    const placed = lines.map((l, i) => {
-      const y = bottom - (lines.length - 1 - i) * size * lead, w = measureTracked(ctx, l, trackEm, size);
-      const x = (al === "left" ? X - optical : al === "right" ? S - X - w + optical : (S - w) / 2) + dx;
-      bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x + w);
-      return { l, x, y, w, col: st.titleAccent && i === lines.length - 1 ? spot : main };
-    });
+    const style = st.titleStyle || "solid", main = colourOf(st.titleColor), fitted = style === "fitted";
+    let size, placed, bx0 = Infinity, bx1 = -Infinity;
+    if (side) {
+      ({ size, placed } = side);
+      placed.forEach(p => { p.col = st.titleAccent && p.i === lines.length - 1 ? spot : main; bx0 = Math.min(bx0, p.x); bx1 = Math.max(bx1, p.x + p.w); });
+      ctx.save(); ctx.translate(side.tx, side.ty); ctx.rotate(side.a);
+      ctx.font = placed[0].font;
+    } else {
+      const maxW = S - X * 2;
+      size = S * 0.19 * (st.titleSize / 100) * k;
+      const bottom = ({ centre: 0.68, lower: 0.815, upper: 0.56 }[st.titlePos] + st.titleDy / 100) * S;
+      let topLimit = S * 0.08;
+      if (artistText && !rotated && artistY < bottom) topLimit = Math.max(topLimit, artistY + S * 0.102);
+      if (st.motifKind !== "none" && motifTop < bottom) topLimit = Math.max(topLimit, motifTop + motifH + S * 0.054);
+      ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
+      const widest = Math.max(...lines.map(l => measureTracked(ctx, l, trackEm, size) / size)), em0 = size;
+      // bleed: the widest line overshoots the far edge (both edges when centred) and the sleeve crops it
+      const bleed = !!st.titleBleed, reach = alignOf("title") === "centre" ? S : S - X;
+      if (bleed) size = reach * Math.max(1.04, 1.14 * st.titleSize / 100) / widest;
+      else if (widest * size > maxW) size = maxW / widest;
+      const asked = bleed ? size : em0;   // what titleSize asked for, to report a forced shrink
+      let sizes = null, offs = null, roomF = 1;
+      if (fitted) {
+        // every line set to the full measure, so short lines grow: a cascading block
+        const meas = bleed ? reach * Math.max(1.04, 1.14 * st.titleSize / 100) : maxW * Math.min(1, st.titleSize / 100);
+        sizes = lines.map(l => Math.min(S * 0.42, meas / (measureTracked(ctx, l, trackEm, em0) / em0)));
+        const fit = () => { offs = stackOffsets(lines, sizes, lead, capRatio(ctx, st.font, face), st.titleCase); return -offs[0] + sizes[0] * 0.72; };
+        let bh = fit();
+        if (bottom - bh < topLimit) { const f = Math.max(0.3, (bottom - topLimit) / bh); sizes = sizes.map(z => z * f); bh = fit(); roomF = f; }
+      } else {
+        let blockH = size * lead * (lines.length - 1) + size * 0.72;
+        if (bleed && blockH > S * 0.8) { size *= S * 0.8 / blockH; blockH = size * lead * (lines.length - 1) + size * 0.72; }
+        if (bottom - blockH < topLimit) size *= Math.max(0.45, (bottom - topLimit) / blockH);
+      }
+      ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
+      const optical = size * 0.035, al = alignOf("title"), dx = S * (st.titleX || 0) / 100;
+      placed = lines.map((l, i) => {
+        const sz = sizes ? sizes[i] : size, font = sizes ? `${weightFor(st.font, "700")} ${sz}px ${face}` : ctx.font;
+        if (sizes) ctx.font = font;
+        const y = sizes ? bottom + offs[i] : bottom - (lines.length - 1 - i) * size * lead, w = measureTracked(ctx, l, trackEm, sz), opt = sizes ? sz * 0.035 : optical;
+        const x = (al === "left" ? X - opt : al === "right" ? S - X - w + opt : (S - w) / 2) + dx;
+        bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x + w);
+        return { l, x, y, w, col: st.titleAccent && i === lines.length - 1 ? spot : main, size: sz, font, i };
+      });
+      if (sizes) { size = Math.min(...sizes); ctx.font = placed[placed.length - 1].font; }
+      const th = size * lead * (lines.length - 1) + size * 0.74;
+      boxes.title = { x: bx0, y: bottom - th, w: bx1 - bx0, h: th + size * 0.06 };
+      // Title held back by the width or the room above it: larger sizes change nothing (the editor can say so).
+      const gotF = sizes ? roomF : size / asked;
+      if (gotF < 0.995) { boxes.titleShrunk = true; boxes.titleMaxSize = Math.floor((sizes ? Math.min(100, st.titleSize) : st.titleSize) * gotF); }
+      if (sizes || bleed) {
+        const top = Math.min(...placed.map(p => p.y - p.size * 0.74)), x0 = Math.max(0, bx0), x1 = Math.min(S, bx1);
+        boxes.title = { x: x0, y: top, w: x1 - x0, h: bottom + size * 0.06 - top };
+      }
+    }
     const lw = Math.max(1, size * 0.028);
+    const fx = TITLE_FX[style] ? TITLE_FX[style](ctx, placed, { size, trackEm, ink, spot, bg, st, face }) : null;
     if (style !== "block" && plateOn("title")) {
       // measured, per line: accents, tall ascenders, tails and the shadow / echo offsets all stay on the plate
-      let top = Infinity, bot = -Infinity;
-      placed.forEach(p => {
+      let top = Infinity, bot = -Infinity, right = bx1 + (style === "shadow" ? size * 0.045 : 0), left = bx0;
+      if (fx && fx.box) ({ top, bot, left, right } = fx.box);
+      else placed.forEach(p => {
+        if (fitted) ctx.font = p.font;
         const m = ctx.measureText(p.l), asc = m.actualBoundingBoxAscent || size * 0.74, dsc = m.actualBoundingBoxDescent || 0;
         top = Math.min(top, p.y - asc - (style === "echo" ? size * 0.48 : 0)); bot = Math.max(bot, p.y + dsc + (style === "shadow" ? size * 0.045 : 0));
+        if (fx && fx.grow) { left = Math.min(left, p.x - fx.grow.l); right = Math.max(right, p.x + p.w + fx.grow.r); bot = Math.max(bot, p.y + dsc + fx.grow.b); }
       });
-      const right = bx1 + (style === "shadow" ? size * 0.045 : 0);
-      plate("title", bx0, top, right - bx0, bot - top, size * 0.14, size * 0.1);
+      if (side) {
+        const r = sideRect(side, left - size * 0.14, top - size * 0.1, right - left + size * 0.28, bot - top + size * 0.2);
+        plate("title", r.x, r.y, r.w, r.h, 0, 0);
+      } else plate("title", left, top, right - left, bot - top, size * 0.14, size * 0.1);
     }
-    if (style === "block") {
+    if (fx) fx.paint();
+    else if (style === "block") {
       // Each line on a bar of spot colour; the text takes whichever of ground/ink reads best on it.
       const onSpot = SP.contrast(bg, spot) >= SP.contrast(ink, spot) ? bg : ink;
       placed.forEach(p => {
@@ -664,16 +999,22 @@ async function render(canvas, state, image, logo) {
       }
       if (style === "shadow") placed.forEach(p => { ctx.fillStyle = rgba(st.titleColor === "accent" ? ink : spot, 1); drawTracked(ctx, p.l, p.x + size * 0.045, p.y + size * 0.045, trackEm, size); });
       placed.forEach(p => {
-        if (style === "outline") { ctx.strokeStyle = rgba(p.col, 1); ctx.lineWidth = lw; ctx.lineJoin = "round"; drawTracked(ctx, p.l, p.x, p.y, trackEm, size, true); }
-        else { ctx.fillStyle = rgba(p.col, 1); drawTracked(ctx, p.l, p.x, p.y, trackEm, size); }
+        if (fitted && ctx.font !== p.font) ctx.font = p.font;
+        if (style === "outline") { ctx.strokeStyle = rgba(p.col, 1); ctx.lineWidth = lw; ctx.lineJoin = "round"; drawTracked(ctx, p.l, p.x, p.y, trackEm, p.size, true); }
+        else { ctx.fillStyle = rgba(p.col, 1); drawTracked(ctx, p.l, p.x, p.y, trackEm, p.size); }
       });
     }
-    const th = size * lead * (lines.length - 1) + size * 0.74;
-    boxes.title = { x: bx0, y: bottom - th, w: bx1 - bx0, h: th + size * 0.06 };
+    if (side) {
+      ctx.restore();
+      const asked = S * 0.19 * (st.titleSize / 100) * k;
+      if (!fitted && size < asked * 0.995) { boxes.titleShrunk = true; boxes.titleMaxSize = Math.floor(st.titleSize * size / asked); }
+      const b = sideRect(side, bx0, 0, bx1 - bx0, side.thick);
+      boxes.title = { x: Math.max(0, b.x), y: Math.max(0, b.y), w: Math.min(S, b.x + b.w) - Math.max(0, b.x), h: Math.min(S, b.y + b.h) - Math.max(0, b.y) };
+    }
   }
 
   // Barcode and catalogue plate (bottom-right stack), plate top-right
-  const right = S - X;
+  const right = S - XR;
   let cornerTop = S * 0.935, barcodeLeft = right;
   if (st.barcode) {
     barcodeLeft = right - barcodeWidth(S, st); const bb = cornerTop;
@@ -690,7 +1031,7 @@ async function render(canvas, state, image, logo) {
     let fs = S * 0.0172 * st.footerSize / 100;
     const fy = S * st.footerY / 100;
     const corner = fy > S * 0.8 && (st.barcode || (st.plate && st.platePos === "br"));
-    const avail = (corner ? Math.min(barcodeLeft, st.plate && st.platePos === "br" ? right - S * 0.12 : right) - S * 0.03 : right) - X;
+    const avail = (corner ? Math.min(barcodeLeft, st.plate && st.platePos === "br" ? right - S * 0.12 : right) - S * 0.03 : right) - XL;
     ctx.fillStyle = rgba(colourOf(st.footerColor), (st.footerOpacity ?? 58) / 100);
     const fc = (t) => applyCase(t, st.footerCase || "upper");
     let text = fc(st.footer).replace(/\s*·\s*/g, "  ·  ");
@@ -700,7 +1041,7 @@ async function render(canvas, state, image, logo) {
     const w = measureTracked(ctx, text, track, fs);
     if (w > avail) { fs *= avail / w; ctx.font = `${weightFor(bodyFace, "600")} ${fs}px ${bface}`; }
     const fw = measureTracked(ctx, text, track, fs);
-    const fx = corner && alignOf("footer") !== "left" ? X + S * (st.footerX || 0) / 100 : ax(fw, "footer");
+    const fx = corner && alignOf("footer") !== "left" ? XL + S * (st.footerX || 0) / 100 : ax(fw, "footer");
     plate("footer", fx, fy - fs * 0.8, fw, fs * 0.95, fs * 0.7, fs * 0.5);
     drawTracked(ctx, text, fx, fy, track, fs);
     boxes.footer = { x: fx, y: fy - fs * 0.9, w: fw, h: fs * 1.2 };
@@ -725,7 +1066,7 @@ function filename(state, size, tag) {
 }
 
 window.SleeveRender = {
-  SLEEVE_DEFAULTS, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
+  SLEEVE_DEFAULTS, TITLE_STYLES, IMG_EFFECTS, TITLE_ROTATES, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
   loadFont, loadFonts, weightFor, faceStack, fontInfo, drawTracked, measureTracked, applyCase, drawBarcode, barcodeWidth, barcodeReversed, eanDigits,
   applyGrain, applyVignette, drawBackdrop, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth, drawShape, drawPattern, patternClip, BUILTIN_MARKS,
 };

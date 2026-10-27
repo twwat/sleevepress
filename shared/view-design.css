@@ -96,3 +96,12 @@
 .view-design .dz-layouts canvas { width: 100%; height: auto; display: block; }
 .view-design .dz-layouts small { font: 10px var(--f-mono); }
 .view-design .dz-scroll { max-height: 236px; overflow: auto; padding-right: 4px; }
+.view-design .dz-wordsbox { border: 1px solid var(--rule-strong); background: var(--bench); }
+.view-design .dz-wordsbox > summary { padding: 11px 14px; font-size: 12px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
+.view-design .dz-words { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 14px 6px; }
+.view-design .dz-words .wide { grid-column: 1 / -1; }
+.view-design .dz-words label.f > span small { color: var(--chalk-faint); font-size: 10px; }
+.view-design .dz-wordsbox .hint { padding: 4px 14px 12px; }
+.view-design .dz-label { margin: 6px 0 -2px; font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: var(--chalk-dim); }
+.view-design .dz-titlebox { display: grid; gap: 8px; }
+.view-design .dz-fitnote { margin: 0; }

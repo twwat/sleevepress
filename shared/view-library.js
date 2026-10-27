@@ -83,10 +83,8 @@ App.view("library", {
       if (isDirty() && !confirm("This release has unsaved changes. Start the next one anyway? (Save first to keep them.)")) return;
       App.nextRelease(); baseline = null; setTimeout(() => { markClean(); refreshCurrent(); }, 150);
     } }, "Next in series");
-    const btnBlank = h("button", { type: "button", class: "btn", id: "lb-blank", onclick: async () => {
-      if (!confirm(isDirty() ? "Start a blank release? Unsaved changes to this one will be lost." : "Start a blank release?")) return;
-      App.checkpoint(true); await SP.reset(); markClean(); refreshAll();
-    } }, "Start blank");
+    // same as New in the top bar, so there is one way to start over
+    const btnBlank = h("button", { type: "button", class: "btn", id: "lb-blank", onclick: () => App.newRelease() }, "New release…");
     const secCurrent = h("section", { class: "panel lb-current", id: "lb-current" },
       h("h2", {}, "This release", curState),
       h("div", { class: "lb-cur" }, h("div", { class: "lb-cur-art" }, curCanvas), h("div", { class: "lb-cur-txt" }, curName, curMeta)),

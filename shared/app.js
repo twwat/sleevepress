@@ -49,7 +49,7 @@ function applyLook(look, opts = {}) {
 
 /* ---------- flagged looks ---------- */
 /* Keys added after looks were first flagged: left out of the id while unused, so older flags keep their ids. */
-const LATER_KEYS = new Set(["plates", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale", "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed"]);
+const LATER_KEYS = new Set(["imgEffect", "titleBleed", "titleRotate", "plates", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale", "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed"]);
 function lookId(look) {
   const D = SR.SLEEVE_DEFAULTS, noPattern = !look.pattern || look.pattern === "none";
   const keys = SR.LOOK_KEYS.filter(k => !LATER_KEYS.has(k) || !(look[k] === undefined || look[k] === D[k] || (noPattern && k.startsWith("pattern"))));
@@ -89,7 +89,7 @@ async function env() { return Makers.env(SP.get(), await SP.cover.image(), await
 /* ---------- saving ---------- */
 async function saveToLibrary(asNew) {
   const c = await thumb(320);
-  const id = await SP.library.save(c.toDataURL("image/jpeg", 0.82), asNew);
+  const id = await SP.library.save(c.toDataURL("image/jpeg", 0.82), asNew); markSaved();
   SP.toast(asNew ? "Saved as a new release in your library" : "Saved to your library");
   return id;
 }
@@ -121,31 +121,203 @@ function route() {
     $("views").appendChild(d.el); d.mount(d.el);
   }
   d.el.hidden = false; current = v;
-  document.querySelectorAll("[data-go]").forEach(a => a.setAttribute("aria-current", a.dataset.go === v ? "page" : "false"));
+  const navKey = FILE_VIEWS.includes(v) ? "files" : views[v].minor ? "more" : v;
+  document.querySelectorAll("[data-go]").forEach(a => a.setAttribute("aria-current", a.dataset.go === navKey ? "page" : "false"));
+  filesSwitch(v);
   document.body.dataset.view = v;
   if (d.show) d.show();
   window.scrollTo(0, 0);
 }
 
+/* ---------- dialogs and menus ---------- */
+/* A modal: title, body (node or nodes), actions [{ label, primary, danger, onclick → false keeps it open }]. Esc / backdrop close it. */
+function modal({ title, body, actions = [], wide, onClose }) {
+  const close = () => { if (!wrap.isConnected) return; if (onClose) onClose(); wrap.remove(); document.removeEventListener("keydown", esc); if (last && last.focus) last.focus(); };
+  const esc = (e) => {
+    if (e.key === "Escape") close();
+    if (e.key === "Tab") {   // keep focus inside the dialog
+      const f = [...box.querySelectorAll("button, input, textarea, select, [href], label.file-drop")].filter(x => !x.disabled && x.offsetParent !== null);
+      if (!f.length) return; const first = f[0], last2 = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last2.focus(); }
+      else if (!e.shiftKey && document.activeElement === last2) { e.preventDefault(); first.focus(); }
+      else if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    }
+  };
+  const last = document.activeElement;
+  const box = h("div", { class: "dlg" + (wide ? " wide" : ""), role: "dialog", "aria-modal": "true", "aria-label": title },
+    h("h2", {}, title), h("div", { class: "dlg-body" }, body),
+    h("div", { class: "dlg-actions" }, ...actions.map(a => h("button", { type: "button", class: "btn" + (a.primary ? " primary" : "") + (a.danger ? " danger" : ""),
+      onclick: async () => { const keep = a.onclick && (await a.onclick()) === false; if (!keep) close(); } }, a.label))));
+  const wrap = h("div", { class: "dlg-wrap", onmousedown: (e) => { if (e.target === wrap) close(); } }, box);
+  document.body.append(wrap); document.addEventListener("keydown", esc);
+  const f = box.querySelector("input, textarea, button.primary, button"); if (f) f.focus();
+  return { close, box };
+}
+/* A drop-down menu under a button. items: [{ label, sub, onclick } | "-"] or a function returning them. */
+function menu(button, items) {
+  let open = null;
+  const shut = () => { if (open) { open.remove(); open = null; button.setAttribute("aria-expanded", "false"); document.removeEventListener("mousedown", away); document.removeEventListener("keydown", key); } };
+  const away = (e) => { if (open && !open.contains(e.target) && e.target !== button && !button.contains(e.target)) shut(); };
+  const key = (e) => { if (e.key === "Escape") { shut(); button.focus(); } };
+  button.setAttribute("aria-haspopup", "menu"); button.setAttribute("aria-expanded", "false");
+  button.addEventListener("click", async () => {
+    if (open) return shut();
+    const list = typeof items === "function" ? await items() : items;
+    open = h("div", { class: "menu", role: "menu" }, ...list.map(it => it === "-" ? h("hr") : h("button", { type: "button", role: "menuitem", class: it.danger ? "danger" : null,
+      onclick: () => { shut(); button.focus(); it.onclick(); } }, h("span", {}, it.label), it.sub ? h("small", {}, it.sub) : null)));
+    document.body.append(open);
+    const r = button.getBoundingClientRect(), w = Math.min(300, innerWidth - 16);
+    Object.assign(open.style, { top: `${r.bottom + 6 + scrollY}px`, left: `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + scrollX}px`, width: `${w}px` });
+    button.setAttribute("aria-expanded", "true");
+    document.addEventListener("mousedown", away); document.addEventListener("keydown", key);
+    const f = open.querySelector("button"); if (f) f.focus();
+  });
+  return shut;
+}
+
+/* ---------- "is this release saved in the library?" ---------- */
+/* The picture lives outside the record, so a change counter stands in for it. */
+let picV = 0; SP.cover.on(() => { picV++; });
+const sigOf = (rec) => { const r = SP.clone(rec); delete r.looks; delete r.libId; delete r.saved; delete r.exported; return JSON.stringify(r) + "|pic" + picV; };
+let savedSig = null;   // nothing to lose compared with this (just saved, opened or started)
+let libSig = null;     // what the library holds for this release, when it is in the library
+const statusFns = new Set();
+const statusNow = () => statusFns.forEach(fn => fn());
+/* Saved to (or opened from) the library. */
+function markSaved() { savedSig = libSig = sigOf(SP.get()); statusNow(); }
+/* A fresh start: nothing to lose yet, but not in the library either. */
+function markClean() { savedSig = sigOf(SP.get()); libSig = null; statusNow(); }
+/* True when there are words, settings or a picture that would be lost. */
+function unsaved() { return savedSig !== sigOf(SP.get()); }
+function inLibrary() { return !!SP.get().libId && libSig === sigOf(SP.get()); }
+
+/* ---------- the words form (first run, New release, Defaults) ---------- */
+/* values pre-fill the fields; empty fields show an example in grey. */
+function wordsForm(values, opts = {}) {
+  const f = {}, field = (k, label, o = {}) => {
+    const inp = o.area ? h("textarea", { rows: 2, class: "up", spellcheck: "false", placeholder: o.ph || "" }) : h("input", { type: "text", placeholder: o.ph || "", spellcheck: "false" });
+    inp.value = values[k] || ""; f[k] = inp;
+    return h("label", { class: "f" + (o.half ? " half" : "") }, h("span", {}, label), inp);
+  };
+  const el = h("div", { class: "wordsform" },
+    h("div", { class: "row" }, field("artist", "Artist", { ph: "e.g. Night Shift" }), field("label", "Record label", { ph: "optional, e.g. House Press" })),
+    field("title", "Title (one line per row)", { area: true, ph: "e.g. SLEEVE\nPRESS" }),
+    h("div", { class: "row" }, field("catalog", "Catalogue no.", { ph: "made from the label if blank" }), field("year", "Year", { ph: String(new Date().getFullYear()) })),
+    opts.footer !== false ? field("footer", "Footer line", { ph: "small print along the bottom (optional)" }) : null);
+  return { el, f, values: () => Object.fromEntries(Object.entries(f).map(([k, i]) => [k, i.value.trim() ? i.value : ""])) };
+}
+/* Fills the gaps a person leaves: catalogue from the label's initials, this year, a footer from both. */
+function completeWords(v) {
+  const o = { ...v };
+  if (!o.year) o.year = String(new Date().getFullYear());
+  if (!o.catalog) { const ini = (o.label || o.artist || "").toUpperCase().replace(/[^A-Z0-9 ]/g, "").split(/\s+/).filter(Boolean).map(w => w[0]).join("").slice(0, 4); o.catalog = (ini || "CAT") + "-001"; }
+  if (!o.footer) o.footer = [o.catalog, o.year].join(" · ");
+  return o;
+}
+/* What the forms start with: only the person's own saved defaults, never the built-in demo words. */
+function ownDefaults() { try { return JSON.parse(localStorage.getItem("sleevepress.defaults") || "{}") || {}; } catch (e) { return {}; } }
+function pictureField() {
+  const input = h("input", { type: "file", accept: "image/*", hidden: true });
+  const txt = h("span", {}, "Add a picture (optional): drop it here or click");
+  const drop = h("label", { class: "file-drop" }, input, txt);
+  SP.bindDrop(SP.cover, { drop, input, onText: (im, m) => { txt.textContent = im ? `Picture: ${(m && m.name) || "added"} · drop another to replace` : "Add a picture (optional): drop it here or click"; } });
+  return drop;
+}
+
+/* New release: ask about unsaved work, then a short form, then Discover. */
+async function newRelease() {
+  const go2 = () => {
+    const form = wordsForm(ownDefaults());
+    const keepLook = h("input", { type: "checkbox", checked: true });
+    modal({ title: "New release", wide: true, body: [form.el, h("label", { class: "check" }, keepLook, "Keep the current look (colours, type, layout)"),
+      h("p", { class: "hint" }, "To have fields filled in for you every time: ⚙ → Defaults for new releases.")],
+      actions: [{ label: "Cancel" }, { label: "Start", primary: true, onclick: async () => {
+        const v = form.values(); if (!v.artist.trim() && !v.title.trim()) { SP.toast("Type an artist or a title first"); return false; }
+        await SP.reset({ ...completeWords(v), artist: v.artist, title: v.title }, { freshLook: !keepLook.checked }); clearHistory(); markClean();
+        go("discover"); SP.toast("New release started. Pick a design you like, or open Design.");
+      } }] });
+  };
+  if (!unsaved()) return go2();
+  modal({ title: "Keep this release?", body: h("p", {}, "This release isn't saved in your library yet. Save a copy before starting a new one?"),
+    actions: [{ label: "Cancel" }, { label: "Don't save" , onclick: () => { setTimeout(go2, 0); } }, { label: "Save, then new", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(go2, 0); } }] });
+}
+function openFile() {
+  const pick = () => {
+    const inp = h("input", { type: "file", accept: ".json,application/json", hidden: true });
+    inp.addEventListener("change", async () => { const f = inp.files[0]; inp.remove(); if (!f) return; const kind = await SP.importFile(f); if (kind === "release") { clearHistory(); markClean(); go("design"); } else if (kind === "library") go("library"); });
+    document.body.append(inp); inp.click();
+  };
+  if (!unsaved()) return pick();
+  modal({ title: "Open a file?", body: h("p", {}, "A release file replaces the one you're on, which has changes that aren't in your library. (A backup file only adds to your library.)"),
+    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: () => { setTimeout(pick, 0); } }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(pick, 0); } }] });
+}
+async function openSaved(id) {
+  const doOpen = async () => { if (await SP.library.open(id)) { markSaved(); go("design"); SP.toast("Opened"); } };
+  if (!unsaved()) return doOpen();
+  modal({ title: "Open another release?", body: h("p", {}, "The release you're on has changes that aren't in your library."),
+    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: doOpen }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); await doOpen(); } }] });
+}
+function editDefaults() {
+  const form = wordsForm(ownDefaults());
+  modal({ title: "Defaults for new releases", wide: true, body: [h("p", { class: "hint" }, "New releases start with these filled in. Leave a field empty to type it each time. Kept in this browser."), form.el],
+    actions: [{ label: "Cancel" },
+      { label: "Copy from this release", onclick: () => { const r = SP.get().release; for (const k of ["artist", "label", "catalog", "year", "footer"]) form.f[k].value = r[k] || ""; SP.toast("Copied. Check them, then Save defaults"); return false; } },
+      { label: "Save defaults", primary: true, onclick: () => { try { localStorage.setItem("sleevepress.defaults", JSON.stringify(form.values())); SP.toast("Defaults saved"); } catch (e) { SP.toast("This browser won't store settings"); } } }] });
+}
+function resetEverything() {
+  modal({ title: "Reset everything?", body: [h("p", {}, "This deletes everything Sleeve Press keeps in this browser: the release you're on, your saved releases, flagged looks, logo and defaults. The page then reloads like a first visit."),
+    h("p", { class: "hint" }, "Want to keep a copy? Cancel, then ⚙ → Back up everything.")],
+    actions: [{ label: "Cancel" }, { label: "Delete everything", danger: true, onclick: async () => { await SP.wipeAll(); location.reload(); } }] });
+}
+
+/* First visit: a short start screen instead of somebody else's demo release. */
+function welcome() {
+  let welcomed = false; try { welcomed = !!localStorage.getItem("sleevepress.welcomed"); } catch (e) {}
+  if (!SP.isFresh() || welcomed) return;
+  const form = wordsForm(ownDefaults(), { footer: false });
+  const asDefault = h("input", { type: "checkbox" });
+  const done = () => { try { localStorage.setItem("sleevepress.welcomed", "1"); } catch (e) {} };
+  modal({ title: "Start a release", wide: true, onClose: done, body: [
+      h("p", {}, "Type your words and Sleeve Press makes endless cover designs from them. Everything stays in this browser."),
+      form.el, pictureField(), h("label", { class: "check" }, asDefault, "Also use these as my defaults for new releases")],
+    actions: [{ label: "Just show me an example", onclick: done },
+      { label: "Show me designs", primary: true, onclick: async () => {
+        const v = form.values(); if (!v.artist.trim() && !v.title.trim()) { SP.toast("Type an artist or a title first"); return false; }
+        const w = completeWords(v);
+        SP.replace({ ...SP.get(), release: { ...SP.get().release, ...w } }); clearHistory(); markClean();
+        if (asDefault.checked) { const { title, ...rest } = w; try { localStorage.setItem("sleevepress.defaults", JSON.stringify(rest)); } catch (e) {} }
+        done(); go("discover");
+      } }] });
+}
+
 /* ---------- top bar ---------- */
+const FILE_VIEWS = ["export", "print"];
 function mountBar() {
   const bar = $("bar");
   bar.innerHTML = `
     <a class="brand" href="#discover">Sleeve Press</a>
     <nav class="tabs" aria-label="Sections"></nav>
     <div class="bar-right">
-      <button type="button" class="relchip" id="relchip" title="Edit the words on the cover"><i></i><b></b><span></span></button>
+      <button type="button" class="relchip" id="relchip" title="Change the words on the cover"><i></i><b></b><span></span></button>
       <span class="status" id="status" title=""></span>
       <button type="button" class="btn small" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
       <button type="button" class="btn small" id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>↷</button>
+      <button type="button" class="btn small" id="newBtn" title="Start a new release">New</button>
+      <button type="button" class="btn small" id="openBtn" title="Open a saved release or a file">Open ▾</button>
       <button type="button" class="btn small primary" id="saveBtn" title="Save this release to your library (Ctrl+S)">Save</button>
+      <button type="button" class="btn small" id="gearBtn" title="Settings" aria-label="Settings">⚙</button>
     </div>`;
   const nav = bar.querySelector(".tabs");
+  const tab = (href, label, go2, cls) => { const a = document.createElement("a"); a.href = href; a.dataset.go = go2; a.textContent = label; if (cls) a.className = cls; nav.appendChild(a); return a; };
   for (const n of order) {
-    const d = views[n]; if (d.hidden) continue;
-    const a = document.createElement("a"); a.href = "#" + n; a.dataset.go = n; a.textContent = d.label;
-    if (d.minor) a.className = "minor";
-    nav.appendChild(a);
+    const d = views[n]; if (d.hidden || d.minor || n === "print") continue;
+    if (n === "export") { tab("#export", "Get files", "files"); continue; }
+    tab("#" + n, d.label, n);
+  }
+  const minor = order.filter(n => views[n].minor);
+  if (minor.length) {
+    const more = h("button", { type: "button", class: "tabbtn", "data-go": "more" }, "More ▾"); nav.appendChild(more);
+    menu(more, minor.map(n => ({ label: views[n].label, sub: views[n].sub, onclick: () => go(n) })));
   }
   const chip = $("relchip");
   const refresh = () => {
@@ -155,15 +327,32 @@ function mountBar() {
     chip.querySelector("span").textContent = [r.catalog, d.tracks.length ? `${d.tracks.length} tracks` : ""].filter(Boolean).join(" · ");
   };
   SP.on(refresh); refresh();
-  chip.addEventListener("click", () => { go("design"); setTimeout(() => window.Design && Design.select && Design.select("title"), 30); });
+  chip.addEventListener("click", () => { go("design"); setTimeout(() => window.Design && Design.words && Design.words(), 30); });
   const st = $("status");
-  const showStatus = (s) => {
-    st.className = "status " + s;
-    st.textContent = s === "browser" ? "Autosaved" : "Not saving";
-    st.title = s === "browser" ? "Your work is kept in this browser. Save puts a copy in your library." : "This browser won't keep data for this page (private window or file:// restrictions). Use Library → Back up to keep your work.";
+  // one plain sentence: is the work kept, and is it in the library
+  const showStatus = () => {
+    const mem = SP.status() !== "browser", lib = inLibrary();
+    st.className = "status " + (mem ? "memory" : lib ? "browser" : "pending");
+    st.textContent = mem ? "Not being kept" : lib ? "Saved in library" : "Not in library yet";
+    st.title = mem ? "This browser won't keep data for this page (private window or file:// restrictions). Use ⚙ → Back up everything to keep your work."
+      : lib ? "This release is in your library. Changes are kept in this browser as you go." : "Your changes are kept in this browser as you go. Press Save to put this release in your library.";
   };
-  SP.onStatus(showStatus); showStatus(SP.status());
+  SP.onStatus(showStatus); SP.on(SP.debounce(showStatus, 300)); SP.cover.on(showStatus); statusFns.add(showStatus); showStatus();
   $("saveBtn").addEventListener("click", () => saveToLibrary());
+  $("newBtn").addEventListener("click", newRelease);
+  menu($("openBtn"), async () => {
+    const list = (await SP.library.list()).slice(0, 8);
+    return [...list.map(e => ({ label: e.name, sub: [e.catalog, new Date(e.updated).toLocaleDateString()].filter(Boolean).join(" · "), onclick: () => openSaved(e.id) })),
+      ...(list.length ? ["-"] : [{ label: "Nothing saved yet", sub: "Save puts the release you're on here", onclick: () => {} }, "-"]),
+      { label: "All saved releases…", onclick: () => go("library") }, { label: "Open a file…", sub: "release.json or a backup", onclick: openFile }];
+  });
+  menu($("gearBtn"), [
+    { label: "Defaults for new releases…", sub: "the words a new release starts with", onclick: editDefaults },
+    { label: "Back up everything", sub: "one file: saved releases, looks, logo", onclick: () => SP.library.backup() },
+    { label: "Restore from a backup…", onclick: openFile },
+    "-",
+    { label: "Reset everything…", sub: "delete all Sleeve Press data in this browser", danger: true, onclick: resetEverything },
+  ]);
   $("undoBtn").addEventListener("click", undo); $("redoBtn").addEventListener("click", redo);
   undoFns.add((a, b) => { $("undoBtn").disabled = !a; $("redoBtn").disabled = !b; });
   document.addEventListener("keydown", (e) => {
@@ -174,6 +363,14 @@ function mountBar() {
     else if (e.key.toLowerCase() === "z" && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (e.key.toLowerCase() === "y" && !typing) { e.preventDefault(); redo(); }
   });
+}
+/* Get files = Export (digital) + Print, one tab with a switch at the top of each. */
+function filesSwitch(v) {
+  const d = views[v]; if (!FILE_VIEWS.includes(v) || !d.el || d.el.querySelector(".files-switch")) return;
+  const sw = h("div", { class: "files-switch", role: "tablist", "aria-label": "Kind of files" },
+    h("a", { href: "#export", role: "tab", "aria-selected": String(v === "export") }, h("b", {}, "Digital"), h("small", {}, "covers, promo images, text")),
+    h("a", { href: "#print", role: "tab", "aria-selected": String(v === "print") }, h("b", {}, "Print"), h("small", {}, "CD inserts, vinyl labels, stickers")));
+  d.el.prepend(sw);
 }
 
 /* ---------- small DOM helpers shared by the views ---------- */
@@ -209,10 +406,20 @@ function migrateLooks() {
 function trackPicture() { const upd = async () => { Looks.picture = !!(await SP.cover.image()); }; SP.cover.on(upd); upd(); }
 function start() {
   trackPicture();
+  if (SP.isFresh()) markClean();   // the example release isn't work anyone would lose
+  // whichever way a saved release gets opened (top bar, Library tab, a restore), compare against what's stored for it
+  let lastLib;
+  const syncSaved = async () => {
+    const id = SP.get().libId; if (id === lastLib) return; lastLib = id; if (!id) return;
+    // opened from the library: what's on screen now is what the library holds
+    const e = await SP.vault.get("lib." + id); if (e && SP.get().libId === id) markSaved();
+  };
+  SP.on(syncSaved); syncSaved();
   migrateLooks(); SP.on(() => { if (SP.get().looks.some(l => !l || !l.id)) migrateLooks(); });
   mountBar(); window.addEventListener("hashchange", route); route();
+  welcome();
 }
 
-window.App = { completeLook, state, commit, applyLook, checkpoint, undo, redo, view, go, start, lookId, flagged, isFlagged, flag, unflag, toggleFlag,
+window.App = { modal, menu, newRelease, openFile, openSaved, editDefaults, resetEverything, unsaved, markSaved, completeLook, state, commit, applyLook, checkpoint, undo, redo, view, go, start, lookId, flagged, isFlagged, flag, unflag, toggleFlag,
   smallImage, thumb, env, saveToLibrary, nextRelease, h, lazy, queue, current: () => current };
 })();

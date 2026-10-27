@@ -8,9 +8,9 @@ const PAPER = { A4: { w: 210, h: 297, label: "A4" }, Letter: { w: 215.9, h: 279.
 const MARGIN = 10, GAP = 4, BLEED = 3, CROP_LEN = 4, VINYL_HOLE = 7.24;
 
 const PIECES = [
-  { id: "booklet", name: "CD booklet front", help: "The front of a jewel case. Slides under the lid clips." },
-  { id: "booklet2", name: "CD booklet, folded", help: "Tracklist panel + front. Fold at the dashed line." },
-  { id: "inlay", name: "CD tray inlay", help: "The back card. Goes behind the tray; the two 6.5 mm spines fold up the sides." },
+  { id: "booklet", name: "CD front insert", help: "The cover of a CD case (12 × 12 cm). Slides in under the clips inside the lid." },
+  { id: "booklet2", name: "CD front insert, folded", help: "Cover on the front, tracklist inside: fold at the dashed line and slide it into the lid." },
+  { id: "inlay", name: "CD back insert", help: "The back of the case, with the spines. Sits behind the clear tray; the two narrow ends fold up as the spines." },
   { id: "wallet", name: "Card wallet sleeve", help: "Back + front panels for a card wallet. Fold in the middle." },
   { id: "disc", name: "CD disc label", help: "Stick-on label for the disc face.", round: true },
   { id: "vinyl", name: "Vinyl centre labels", help: "One label per side, from the tracklist sides.", round: true },
@@ -273,7 +273,7 @@ function mount(el) {
   root = el;
   el.append(
     h("div", { class: "view-head" },
-      h("div", {}, h("h1", { text: "Print" }), h("p", { text: "Pick the pieces you need. They are laid out at exact size on your paper, ready to print, cut and fold." }))),
+      h("div", {}, h("h1", { text: "CD inserts, labels & stickers" }), h("p", { text: "Tick what you want to print. You get a PDF at the exact size, with lines to cut and fold along." }))),
     h("div", { class: "pr-wrap" },
       h("div", { class: "pr-main" },
         h("div", { class: "pr-pieces", id: "pr-pieces" }),

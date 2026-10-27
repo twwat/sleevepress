@@ -8,14 +8,22 @@ const KEY = "sleevepress.release.v1";
 const IMG_KEY = "sleevepress.image.v1";
 const SCHEMA = "sleevepress.release/1";
 
+/* The words a new release starts with. Built-ins below; the user's own (Settings → Defaults) win. */
+const DEFAULTS_KEY = "sleevepress.defaults";
+const BUILTIN_WORDS = {
+  artist: "NIGHT SHIFT", title: "SLEEVE\nPRESS", catalog: "HPR-001", year: "2026",
+  footer: "HPR-001 · 2026", format: "", label: "HOUSE PRESS RECORDS",
+  date: "", cta: "OUT NOW", links: "Spotify · Apple Music · Bandcamp",
+};
+const WORD_KEYS = Object.keys(BUILTIN_WORDS);
+function userDefaults() { try { const o = JSON.parse(localStorage.getItem(DEFAULTS_KEY) || "null"); return o && typeof o === "object" ? o : {}; } catch (e) { return {}; } }
+function defaultWords() { const u = userDefaults(), o = { ...BUILTIN_WORDS }; for (const k of WORD_KEYS) if (typeof u[k] === "string") o[k] = u[k]; return o; }
+function setDefaultWords(o) { const keep = {}; for (const k of WORD_KEYS) if (typeof o[k] === "string") keep[k] = o[k]; try { localStorage.setItem(DEFAULTS_KEY, JSON.stringify(keep)); return true; } catch (e) { return false; } }
+
 const DEFAULT = () => ({
   schema: SCHEMA,
-  release: {
-    artist: "DUPPY WIRE", title: "NINE\nNIGHT", catalog: "DPWR-001", year: "",
-    footer: "KGN — N17 · DPWR-001", format: "EP", label: "DUPPY WIRE SOUND",
-    date: "", cta: "OUT NOW", links: "Spotify · Apple Music · Bandcamp",
-  },
-  palette: { bg: "#15120f", ink: "#ece6da", accent: "#9b1b1e", name: "Nine Night", swatches: [], words: "" },
+  release: defaultWords(),
+  palette: { bg: "#15120f", ink: "#ece6da", accent: "#9b1b1e", name: "House", swatches: [], words: "" },
   tracks: [],      // [{ title, feat, bpm, key, length, side }]
   sleeve: {},      // Sleeve Press settings beyond the shared fields (merged over its own defaults)
   typeset: {},     // Tracklist settings
@@ -158,12 +166,17 @@ function mergeDefaults(saved) {
   if (typeof saved.saved === "number") d.saved = saved.saved;
   return d;
 }
+let fresh = false;   // nothing was stored: a first visit (or storage was cleared)
 function load() {
-  try { const raw = localStorage.getItem(KEY); if (raw) { db = mergeDefaults(JSON.parse(raw)); return db; } } catch (e) { setStatus("memory"); }
-  db = DEFAULT(); return db;
+  try { const raw = localStorage.getItem(KEY); if (raw) { db = mergeDefaults(JSON.parse(raw)); fresh = false; return db; } } catch (e) { setStatus("memory"); }
+  db = DEFAULT(); fresh = true; return db;
 }
-const persistSoon = (() => { let h; return () => { clearTimeout(h); h = setTimeout(persist, 150); }; })();
+/* Writes are batched; `pending` marks a change that hasn't reached storage yet. */
+let pending = false;
+const persistSoon = (() => { let h; return () => { pending = true; clearTimeout(h); h = setTimeout(persist, 150); }; })();
 function persist() {
+  pending = false;
+  if (!db || wiped) return;
   db.saved = Date.now();
   try { localStorage.setItem(KEY, JSON.stringify(db)); vault.del("record"); }
   catch (e) { vault.set("record", clone(db)).then(ok => { if (!ok) setStatus("memory"); }); }
@@ -184,7 +197,9 @@ const switchFns = new Set();
 const onSwitch = (fn) => { switchFns.add(fn); return () => switchFns.delete(fn); };
 const switched = () => switchFns.forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
 window.addEventListener("storage", (e) => { if (e.key === KEY) { load(); emit(true); } });
-window.addEventListener("beforeunload", () => { if (db) persist(); });
+// Only flush a change that is still waiting. Saving unconditionally here would write the old release straight back
+// after someone clears the site's storage and reloads.
+window.addEventListener("beforeunload", () => { if (db && pending && !wiped) persist(); });
 
 /* ---------- shared pictures: the cover image and the label logo ---------- */
 function asset(name, cap, mime) {
@@ -274,7 +289,23 @@ async function importFile(file) {
     await importObject(o); toast("Release loaded"); return "release";
   } catch (e) { toast("That isn't a Sleeve Press file."); return null; }
 }
-async function reset() { switched(); const keep = get(); db = DEFAULT(); db.looks = keep.looks; db.release.label = keep.release.label; persist(); await cover.clear(); emit(false); }
+/* A new release: the default words (or `words`), the current look kept unless `freshLook`, no picture, no tracks. */
+async function reset(words, opts = {}) {
+  switched(); const keep = get(); db = DEFAULT();
+  if (!opts.freshLook) { db.sleeve = { ...keep.sleeve }; db.palette = { ...keep.palette }; db.typeset = { ...keep.typeset }; }
+  db.looks = keep.looks;
+  if (words) for (const k of WORD_KEYS) if (typeof words[k] === "string") db.release[k] = words[k];
+  persist(); await cover.clear(); emit(false);
+}
+/* Settings → Reset everything: every trace of the app in this browser, then a reload. */
+async function wipeAll() {
+  pending = false; db = null;
+  try { Object.keys(localStorage).filter(k => k.startsWith("sleevepress")).forEach(k => localStorage.removeItem(k)); } catch (e) {}
+  mem.clear();
+  await new Promise(res => { try { const d = idbP; idbP = null; Promise.resolve(d).then(x => { try { x && x.close(); } catch (e) {} const r = indexedDB.deleteDatabase("sleevepress"); r.onsuccess = r.onerror = r.onblocked = () => res(); }); } catch (e) { res(); } });
+  wiped = true;
+}
+let wiped = false;
 
 /* ---------- the library: saved releases (with their pictures) ---------- */
 const LIB_SCHEMA = "sleevepress.library/1";
@@ -408,7 +439,7 @@ const DEMO_TRACKS = [
 ].join("\n");
 
 window.SP = {
-  KEY, SCHEMA, FONTS, PRESETS, DEMO_TRACKS, $, vault, library, cover, logo, bindDrop, replace, readJSON, onSwitch,
+  KEY, SCHEMA, WORD_KEYS, defaultWords, setDefaultWords, wipeAll, isFresh: () => fresh, FONTS, PRESETS, DEMO_TRACKS, $, vault, library, cover, logo, bindDrop, replace, readJSON, onSwitch,
   status: () => status, onStatus: (fn) => { statusListeners.add(fn); return () => statusListeners.delete(fn); },
   hexToRgb, rgbToHex, rgba, lum, relLum, contrast, rgbToHsl, hslToRgb, rgbToLab, labDist,
   safeName, mulberry32, hashStr, clone, toast, download, copy, canvasBlob, debounce, rafOnce, bindSeg,

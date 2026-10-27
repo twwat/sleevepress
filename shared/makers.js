@@ -68,9 +68,9 @@ async function bareBack(e, size) {
 
 /* ---------- print pieces (sizes in mm, drawn at px per mm) ---------- */
 const PRINT = {
-  booklet: { w: 120, h: 120, label: "CD booklet front" },
-  booklet2: { w: 240, h: 120, label: "CD booklet, folded", folds: [[120, 0, 120, 120]] },
-  inlay: { w: 151, h: 118, label: "CD tray inlay", folds: [[6.5, 0, 6.5, 118], [144.5, 0, 144.5, 118]] },
+  booklet: { w: 120, h: 120, label: "CD front insert" },
+  booklet2: { w: 240, h: 120, label: "CD front insert, folded", folds: [[120, 0, 120, 120]] },
+  inlay: { w: 151, h: 118, label: "CD back insert", folds: [[6.5, 0, 6.5, 118], [144.5, 0, 144.5, 118]] },
   wallet: { w: 250, h: 125, label: "Card wallet sleeve", folds: [[125, 0, 125, 125]] },
 };
 async function booklet2(e, ppm, wmm = 120) {
@@ -136,7 +136,7 @@ async function disc(e, D, hole = 41 / 117) {
   // The cover's own look, but with the words moved clear of the hub: artist near the top, title as one line near the bottom.
   const discSt = { ...st, title: titleOneLine(st), titleCase: "asis", titlePos: "lower", titleDy: 7, titleSize: Math.min(st.titleSize, 80), titleX: 0, titleAlign: "centre",
     align: "centre", margin: 19, artistY: 17, artistX: 0, artistAlign: "centre", artistRotate: "none", year: "", motifKind: "none", footer: "",
-    barcode: false, plate: false, labelMark: "none", frame: false, vignette: 0 };
+    barcode: false, plate: false, labelMark: "none", frame: false, vignette: 0, titleRotate: "none", titleBleed: false };
   ctx.drawImage(await cover({ ...e, st: discSt }, D), 0, 0);
   // a quiet ring of ground round the hub, with the catalogue set round it
   const r = D / 2, hubR = D * hole / 2, ringR = hubR + D * 0.075;
