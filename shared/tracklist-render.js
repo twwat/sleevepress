@@ -66,7 +66,7 @@ async function render(canvas, db, image) {
   ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, 0, W, H);
   const timg = ts.ghost ? SR.toned(image, sl) : null;
   if (timg) { SR.drawCover(ctx, timg, 0, 0, W, H, { zoom: sl.zoom, shiftX: sl.shiftX, shiftY: sl.shiftY }); ctx.fillStyle = rgba(bg, ts.ghostDim / 100); ctx.fillRect(0, 0, W, H); }
-  if (ts.backdrop) SR.drawBackdrop(ctx, W, H, { ...sl, shape: "none" }, bg, ink, spot, 0.45);   // the front's wash and texture, quieter; the big shape would sit behind the list
+  if (ts.backdrop) SR.drawBackdrop(ctx, W, H, { ...sl, shape: "none", pattern: sl.patternArea === "edge" ? sl.pattern : "none" }, bg, ink, spot, 0.45);   // the front's wash and texture, quieter; the big shape would sit behind the list
   SR.applyVignette(ctx, W, H, sl, bg, ink);
   SR.drawFrame(ctx, W, H, sl, ink, spot);
 

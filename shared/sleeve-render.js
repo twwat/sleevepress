@@ -9,7 +9,9 @@ const SLEEVE_DEFAULTS = {
   // texture + border
   grain: 28, vignette: 55, frame: true, frameStyle: "hairline", frameInset: 4.5, frameWidth: 100, frameOpacity: 14, frameColor: "ink",
   // backdrop layers
-  wash: "none", washAmt: 45, shape: "none", shapeAmt: 85, shapeSize: 55, shapeX: 70, shapeY: 38, shapeColor: "accent",
+  wash: "none", washAmt: 45, shape: "none", shapeAmt: 85, shapeSize: 55, shapeX: 70, shapeY: 38, shapeColor: "accent", shapeOutline: false, shapeRot: 0,
+  // pattern layer (shared/patterns.js): where it sits, how loud, which colours
+  pattern: "none", patternAmt: 35, patternScale: 100, patternAngle: 0, patternArea: "full", patternPos: 50, patternColor: "ink", patternSeed: 1,
   texture: "none", textureAmt: 45,
   // layout
   align: "left", margin: 11, artistY: 15.8, motifY: 20.6, footerY: 92.2, footerPos: "bottom",
@@ -291,6 +293,47 @@ function applyVignette(ctx, W, H, state, bg, ink) {
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
 }
 
+/* ---------- pattern layer ---------- */
+/* Where the pattern is allowed: a path builder, or null for the whole sleeve. */
+function patternClip(st, W, H) {
+  const S = Math.min(W, H), p = (st.patternPos ?? 50) / 100;
+  switch (st.patternArea) {
+    case "band": { const h = H * 0.26; return (c) => c.rect(0, H * p - h / 2, W, h); }
+    case "top": return (c) => c.rect(0, 0, W, H * p);
+    case "bottom": return (c) => c.rect(0, H * p, W, H * (1 - p));
+    case "left": return (c) => c.rect(0, 0, W * p, H);
+    case "right": return (c) => c.rect(W * p, 0, W * (1 - p), H);
+    case "edge": { const e = S * 0.07; return (c) => { c.rect(0, 0, W, H); c.rect(e, H - e, W - e * 2, -(H - e * 2)); }; }   // a border made of pattern (inner rect wound backwards)
+    default: return null;
+  }
+}
+function drawPattern(ctx, W, H, st, bg, ink, spot, k, clip, bgOverride) {
+  const fg = st.patternColor === "accent" ? spot : ink, fg2 = st.patternColor === "duo" ? (fg === ink ? spot : ink) : fg;
+  ctx.save();
+  if (clip) { ctx.beginPath(); clip(ctx); ctx.clip("evenodd"); }
+  try {
+    Patterns.draw(ctx, W, H, st.pattern, { S: Math.min(W, H), scale: st.patternScale, angle: st.patternAngle, fg, fg2, bg: bgOverride || bg,
+      alpha: Math.min(1, (st.patternAmt / 100) * k), seed: st.patternSeed || 1 });
+  } catch (e) { console.error(e); }
+  ctx.restore();
+}
+/* The big shape: the built-in five, or any of shared/glyphs.js's shapes. */
+function drawShape(ctx, st, cx, cy, r, col, a, col2, bg, S) {
+  const legacy = ["circle", "ring", "square", "half", "bars"].includes(st.shape);
+  if (window.Glyphs && (!legacy || st.shapeOutline || st.shapeRot)) {
+    try { Glyphs.drawShape(ctx, st.shape, cx, cy, r, { color: col, color2: col2, bg, alpha: a, seed: st.patternSeed || 1, outline: !!st.shapeOutline, lw: Math.max(1, S * 0.006), rot: st.shapeRot || 0 }); return; }
+    catch (e) { if (!legacy) { console.error(e); return; } }
+  }
+  ctx.save(); ctx.fillStyle = rgba(col, a); ctx.strokeStyle = rgba(col, a);
+  ctx.beginPath();
+  if (st.shape === "circle") { ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); }
+  else if (st.shape === "ring") { ctx.lineWidth = r * 0.16; ctx.arc(cx, cy, r * 0.92, 0, Math.PI * 2); ctx.stroke(); }
+  else if (st.shape === "square") { ctx.fillRect(cx - r, cy - r, r * 2, r * 2); }
+  else if (st.shape === "half") { ctx.arc(cx, cy, r, Math.PI, 0); ctx.closePath(); ctx.fill(); }
+  else if (st.shape === "bars") { const n = 7, bw = (r * 2) / (n * 2 - 1); for (let i = 0; i < n; i++) ctx.fillRect(cx - r + i * bw * 2, cy - r, bw, r * 2); }
+  ctx.restore();
+}
+
 /* ---------- backdrop: wash, big shape, texture. `k` scales strength (the back sleeve uses less). ---------- */
 function drawBackdrop(ctx, W, H, st, bg, ink, spot, k = 1) {
   const S = Math.min(W, H);
@@ -303,17 +346,23 @@ function drawBackdrop(ctx, W, H, st, bg, ink, spot, k = 1) {
     g.addColorStop(0, rgba(spot, a)); g.addColorStop(1, rgba(spot, 0));
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
-  if (st.shape && st.shape !== "none" && st.shapeAmt > 0) {
+  const hasShape = st.shape && st.shape !== "none" && st.shapeAmt > 0;
+  const hasPattern = st.pattern && st.pattern !== "none" && st.patternAmt > 0 && window.Patterns;
+  if (hasPattern && st.patternArea !== "shape") drawPattern(ctx, W, H, st, bg, ink, spot, k, patternClip(st, W, H));
+  if (hasShape) {
     const col = st.shapeColor === "ink" ? ink : spot, a = (st.shapeAmt / 100) * k;
     const cx = W * st.shapeX / 100, cy = H * st.shapeY / 100, r = S * st.shapeSize / 200;
-    ctx.save(); ctx.fillStyle = rgba(col, a); ctx.strokeStyle = rgba(col, a);
-    ctx.beginPath();
-    if (st.shape === "circle") { ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); }
-    else if (st.shape === "ring") { ctx.lineWidth = r * 0.16; ctx.arc(cx, cy, r * 0.92, 0, Math.PI * 2); ctx.stroke(); }
-    else if (st.shape === "square") { ctx.fillRect(cx - r, cy - r, r * 2, r * 2); }
-    else if (st.shape === "half") { ctx.arc(cx, cy, r, Math.PI, 0); ctx.closePath(); ctx.fill(); }
-    else if (st.shape === "bars") { const n = 7, bw = (r * 2) / (n * 2 - 1); for (let i = 0; i < n; i++) ctx.fillRect(cx - r + i * bw * 2, cy - r, bw, r * 2); }
-    ctx.restore();
+    const shapeAt = (c, alpha, c2) => drawShape(ctx, st, cx, cy, r, c, alpha, c2 || (c === ink ? spot : ink), bg, S);
+    if (hasPattern && st.patternArea === "shape") {
+      // the pattern lives inside the shape's silhouette
+      shapeAt(col, a);
+      const m = document.createElement("canvas"); m.width = Math.ceil(W); m.height = Math.ceil(H);
+      const mc = m.getContext("2d");
+      drawShape(mc, { ...st, shapeOutline: false }, cx, cy, r, [0, 0, 0], 1, [0, 0, 0], bg, S);
+      mc.globalCompositeOperation = "source-in";
+      drawPattern(mc, W, H, st, bg, col === ink ? spot : ink, col === ink ? spot : ink, k / Math.max(0.2, st.patternAmt / 100) * 0.9, null, bg);
+      ctx.save(); ctx.globalAlpha = Math.min(1, (st.patternAmt / 100) * 1.4); ctx.drawImage(m, 0, 0); ctx.restore();
+    } else shapeAt(col, a);
   }
   if (st.texture && st.texture !== "none" && st.textureAmt > 0) {
     const a = (st.textureAmt / 100) * k; ctx.save();
@@ -370,6 +419,7 @@ function drawFrame(ctx, W, H, st, ink, spot) {
 }
 
 /* ---------- motif marks ---------- */
+const BUILTIN_MARKS = new Set(["bars", "dots", "squares", "rings", "diamonds", "ticks", "wave", "slants", "plus", "chevrons"]);
 function drawMotif(ctx, S, st, xStart, top, ink, spot, seedText) {
   const k = st.motifSize / 100, pitch = S * 0.0232 * st.motifPitch / 100, h = S * 0.05 * k, w = S * 0.0105 * k;
   const mark = st.missing >= 1 && st.missing <= st.count ? st.missing : 0;
@@ -382,6 +432,10 @@ function drawMotif(ctx, S, st, xStart, top, ink, spot, seedText) {
     const outline = isMark && st.missingStyle === "outline";
     ctx.fillStyle = isMark ? rgba(spot, 1) : rgba(ink, 1); ctx.strokeStyle = rgba(spot, 1);
     const lw = ctx.lineWidth;
+    if (!BUILTIN_MARKS.has(st.motifKind) && window.Glyphs) {
+      try { Glyphs.drawMark(ctx, st.motifKind, x, top, w, h, { color: isMark ? spot : ink, outline, lw, seed: SP.hashStr(seedText || "wave"), i: i - 1 }); } catch (e) { console.error(e); }
+      continue;
+    }
     ctx.beginPath();
     switch (st.motifKind) {
       case "dots": ctx.arc(x + w / 2, cy, w * 0.62, 0, Math.PI * 2); break;
@@ -639,6 +693,6 @@ function filename(state, size, tag) {
 window.SleeveRender = {
   SLEEVE_DEFAULTS, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
   loadFont, loadFonts, weightFor, faceStack, fontInfo, drawTracked, measureTracked, applyCase, drawBarcode, barcodeWidth, barcodeReversed, eanDigits,
-  applyGrain, applyVignette, drawBackdrop, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth,
+  applyGrain, applyVignette, drawBackdrop, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth, drawShape, drawPattern, patternClip, BUILTIN_MARKS,
 };
 })();

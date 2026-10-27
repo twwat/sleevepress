@@ -214,6 +214,24 @@ function rects(s) {
   return out;
 }
 
+/* Shapes with inner detail or line work: they read as noise behind words. */
+const BUSY_SHAPES = new Set(["bars", "target", "scope", "rays", "chevrons", "squares", "spiral", "wave", "honeycomb", "halftone", "sunset", "web", "snowflake",
+  "glass", "rosewindow", "swords", "shuriken", "starburst", "sun", "discs", "eye"]);
+
+/* Rectangles the pattern covers, in sleeve percent. */
+function patternRect(s) {
+  const p = s.patternPos ?? 50;
+  switch (s.patternArea) {
+    case "band": return [R(0, p - 13, 100, 26)];
+    case "top": return [R(0, 0, 100, p)];
+    case "bottom": return [R(0, p, 100, 100 - p)];
+    case "left": return [R(0, 0, p, 100)];
+    case "right": return [R(p, 0, 100 - p, 100)];
+    case "edge": return [R(0, 0, 100, 7), R(0, 93, 100, 7), R(0, 0, 7, 100), R(93, 0, 7, 100)];
+    default: return [R(0, 0, 100, 100)];
+  }
+}
+
 /* ---------- colour helpers for legibility checks ---------- */
 const mixRgb = (a, b, t) => [0, 1, 2].map(i => a[i] + (b[i] - a[i]) * t);
 const textRgb = (s, which) => hexToRgb(s[which] === "accent" ? s.accent : s.ink);
@@ -228,8 +246,54 @@ function picContrast(s, txt, dim) {
    locks: { colour, type, layout, motif, border, backdrop, picture }  true = leave that group alone.
    opts: { mood, feel } narrow colour and type for Discover. (hard, hue, paletteMode are used by mutate.)
    The groups are rolled first, then a repair pass keeps text apart, off the picture's busy parts and legible. */
+/* ---------- dealing: spread choices across a stream ----------
+   With opts.deal = { i, base }, the main choices (backdrop scheme, shape, pattern, marks, picture placement, border,
+   face, title style) come from shuffled decks instead of independent dice, so any run of cards in Discover
+   cycles through the options instead of repeating the same few. Without it, they're plain seeded picks. */
+function dealer(deal, rnd) {
+  if (!deal) return (key, list) => list[Math.floor(rnd() * list.length)];
+  return (key, list) => {
+    if (!list.length) return undefined;
+    const r = mulberry32((SP.hashStr(key) ^ Math.imul(deal.base | 0, 2654435761)) >>> 0);
+    const order = list.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+    const round = Math.floor(deal.i / list.length), at = deal.i % list.length;
+    const passOrder = (n) => {
+      const o = list.map((_, i) => i), r0 = n ? mulberry32((SP.hashStr(key) + n * 7919 + (deal.base | 0)) >>> 0) : mulberry32((SP.hashStr(key) ^ Math.imul(deal.base | 0, 2654435761)) >>> 0);
+      for (let i = o.length - 1; i > 0; i--) { const j = Math.floor(r0() * (i + 1)); [o[i], o[j]] = [o[j], o[i]]; }
+      return o;
+    };
+    if (list.length > 1) {
+      // each pass is its own shuffle; a pass that would open with the card the last one ended on swaps its first two
+      const o = passOrder(round);
+      if (round && list[passOrder(round - 1)[list.length - 1]] === list[o[0]]) [o[0], o[1]] = [o[1], o[0]];
+      return list[o[at]];
+    }
+    // each pass through the deck is reshuffled, so neighbours differ between passes too
+    if (round) { const r2 = mulberry32((SP.hashStr(key) + round * 7919 + (deal.base | 0)) >>> 0); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(r2() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; } }
+    return list[order[at]];
+  };
+}
+/* Weighted list → flat deck. */
+const deck = (pairs) => pairs.flatMap(([v, n]) => Array(n).fill(v));
+
+/* The big shapes and marks on offer: the built-ins, plus shared/glyphs.js when it is loaded. Round shapes are kept
+   to a small share so circles don't dominate. */
+function shapeDeck() {
+  const g = window.Glyphs && Glyphs.SHAPES;
+  if (!g) return ["circle", "ring", "square", "half", "bars"];
+  const round = g.filter(x => x.round).map(x => x.id), other = g.filter(x => !x.round).map(x => x.id);
+  return [...other, ...round.filter((_, i) => i % 2 === 0)];   // about half the round ones, once each
+}
+function markDeck() {
+  const g = window.Glyphs && Glyphs.MARKS ? Glyphs.MARKS.map(x => x.id) : [];
+  return [...MOTIFS, ...g.filter(id => !MOTIFS.includes(id))];
+}
+const patternList = () => (window.Patterns && Patterns.LIST) || [];
+
 function randomize(state, seed, locks = {}, opts = {}) {
   const rnd = mulberry32((seed * 2654435761) >>> 0 || 1), pick = (a) => a[Math.floor(rnd() * a.length)];
+  const dealt = dealer(opts.deal, rnd);
   const between = (a, b, step = 1) => Math.round((a + rnd() * (b - a)) / step) * step;
   const chance = (p) => rnd() < p;
   const s = { ...state };
@@ -243,14 +307,14 @@ function randomize(state, seed, locks = {}, opts = {}) {
   }
   if (!locks.type) {
     const faces = FONTS.filter(f => (feel === "any" || f.feel === feel) && !f.manual);
-    const F0 = pick(faces.length ? faces : FONTS); s.font = F0.n;
+    const F0 = dealt("font:" + feel, faces.length ? faces : FONTS); s.font = F0.n;
     s.bodyFont = chance(0.5) ? "" : pick(BODY_FONTS);
     s.artistFont = chance(0.22) ? pick(FONTS.filter(f => f.n !== s.font && !FINE.has(f.n))).n : "";
     s.artistCase = pick(["upper", "upper", "upper", "title", "lower"]); s.artistColor = chance(0.2) ? "accent" : "ink";
     s.artistWeight = pick([600, 700, 700, 800]);
     s.artistTrack = s.artistCase === "upper" ? between(16, 44) : between(4, 14);
     s.artistSize = between(85, 130, 5);
-    s.titleStyle = chance(0.6) ? "solid" : pick(FINE.has(s.font) ? ["shadow", "block", "block"] : ["outline", "echo", "shadow", "block", "block", "shadow"]);
+    s.titleStyle = dealt("titleStyle", FINE.has(s.font) ? deck([["solid", 6], ["shadow", 2], ["block", 2]]) : deck([["solid", 6], ["outline", 1], ["echo", 1], ["shadow", 2], ["block", 2]]));
     s.titleColor = chance(0.12) ? "accent" : "ink";
     s.titleCase = pick(F0.mono ? ["upper", "upper", "lower"] : ["upper", "upper", "upper", "title", "lower"]);
     const up = s.titleCase === "upper";
@@ -263,7 +327,7 @@ function randomize(state, seed, locks = {}, opts = {}) {
     s.footerSize = between(90, 120, 5); s.footerTrack = between(14, 36); s.footerCase = chance(0.85) ? "upper" : "asis";
   }
   if (!locks.motif) {
-    s.motifKind = chance(0.1) ? "none" : pick(MOTIFS);
+    s.motifKind = chance(0.1) ? "none" : dealt("motif", markDeck());
     s.motifSize = between(75, 140, 5); s.motifPitch = between(85, 160, 5);
     s.count = between(3, 14);
     while (s.count > 3 && motifW(s) > 40) s.count--;   // a row of marks, not a fence
@@ -271,7 +335,7 @@ function randomize(state, seed, locks = {}, opts = {}) {
     s.missingStyle = pick(["outline", "filled", "gap"]);
   }
   if (!locks.border) {
-    s.frame = chance(0.75); s.frameStyle = pick(FRAME_STYLES); s.frameInset = between(3, 7, 0.5);
+    s.frame = chance(0.75); s.frameStyle = dealt("frame", FRAME_STYLES); s.frameInset = between(3, 7, 0.5);
     s.frameWidth = between(80, 220, 10); s.frameOpacity = between(14, 55); s.frameColor = chance(0.8) ? "ink" : "accent";
     s.barcodeStyle = pick(["box", "box", "clear", "spot", "spotbox"]);
   }
@@ -279,7 +343,7 @@ function randomize(state, seed, locks = {}, opts = {}) {
 
   if (!locks.layout) layout(s, rnd, pick, between, chance);
   if (!locks.picture) {
-    s.imgMode = chance(0.5) ? "bleed" : pick(["panel", "panel", "band", "circle", "split", "inset", "top", "arch"]);
+    s.imgMode = dealt("imgMode", deck([["bleed", 7], ["panel", 2], ["band", 1], ["circle", 1], ["split", 1], ["inset", 1], ["top", 1], ["arch", 1]]));
     s.imgTone = pick(["ink", "ink", "accent", "original"]); s.dim = s.imgMode === "bleed" ? between(35, 70) : between(0, 40);
     s.imgPosterize = chance(0.18) ? between(2, 5) : 0; s.imgContrast = between(90, 140, 5);
     s.imgBlur = chance(0.15) ? between(6, 30) : 0;
@@ -289,9 +353,28 @@ function randomize(state, seed, locks = {}, opts = {}) {
   if (!locks.backdrop) {
     const pic = s.imgMode === "bleed";
     s.wash = chance(0.35) ? pick(["top", "bottom", "radial", "diagonal"]) : "none"; s.washAmt = between(25, pic ? 55 : 70);
-    s.shape = chance(pic ? 0.2 : 0.42) ? pick(["circle", "ring", "square", "half", "bars", "circle", "ring"]) : "none";
-    s.shapeAmt = between(40, pic ? 65 : 95); s.shapeSize = between(35, 85); s.shapeX = between(20, 85); s.shapeY = between(20, 80);
-    s.shapeColor = chance(0.75) ? "accent" : "ink";
+    // One scheme per sleeve: plain ground, a big shape, a pattern, or a pattern working with a shape.
+    const pats = patternList();
+    const scheme = dealt(pic ? "scheme:pic" : "scheme", deck(pats.length ? (pic ? [["plain", 4], ["shape", 2], ["pattern", 2], ["combo", 1]] : [["plain", 2], ["shape", 3], ["pattern", 3], ["combo", 2]]) : [["plain", 3], ["shape", 2]]));
+    s.shape = "none"; s.pattern = "none"; s.shapeOutline = false; s.shapeRot = 0;
+    if (scheme === "shape" || scheme === "combo") {
+      s.shape = dealt("shape", shapeDeck());
+      s.shapeAmt = between(40, pic ? 65 : 95); s.shapeSize = between(35, 85); s.shapeX = between(20, 85); s.shapeY = between(20, 80);
+      s.shapeColor = chance(0.75) ? "accent" : "ink";
+      s.shapeOutline = scheme === "shape" && chance(0.22); s.shapeRot = chance(0.3) ? between(-25, 25) : 0;
+    }
+    if (scheme === "pattern" || scheme === "combo") {
+      const P0 = dealt("pattern", pats); s.pattern = P0.id;
+      s.patternSeed = between(1, 9999); s.patternScale = between(65, 150, 5);
+      s.patternAngle = chance(0.25) ? pick([45, -45, 30, 15, -15, 90]) : 0;
+      s.patternColor = dealt("patternColor", deck([["ink", 3], ["accent", 2], ["duo", 2]]));
+      s.patternArea = scheme === "combo" && s.shape !== "bars" ? dealt("patternArea:combo", ["shape", "shape", "full", "band", "edge"])
+        : dealt("patternArea", deck([["full", 4], ["band", 1], ["top", 1], ["bottom", 1], ["left", 1], ["right", 1], ["edge", 1]]));
+      s.patternPos = s.patternArea === "band" ? between(30, 75) : between(38, 62);
+      // louder patterns get less ink; a picture underneath halves it again
+      const busy = P0.busy ?? 0.5;
+      s.patternAmt = Math.round(between(30, 75) * (1 - busy * 0.55) * (pic ? 0.6 : 1));
+    }
     s.texture = chance(0.3) ? pick(["halftone", "lines", "grid"]) : "none"; s.textureAmt = between(25, 75);
     s.grain = between(8, 55); s.vignette = between(15, 75);
   }
@@ -458,17 +541,42 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
     const bg = hexToRgb(s.bg), rad = s.shapeSize / 2;
     const shapeRect = () => R(s.shapeX - rad, s.shapeY - rad, rad * 2, s.shape === "half" ? rad : rad * 2);
     const checks = [[r.title, s.titleStyle === "block" ? [] : titleCols(), 2.6], [r.artist, [textRgb(s, "artistColor")], 3], [r.footer, [textRgb(s, "footerColor")], 2.4]];
-    const ok = () => checks.every(([q, cols, t]) => !q || !overlap(shapeRect(), q) ||
+    // detailed shapes (and any shape carrying a pattern) never sit behind the title; plain ones may if the colours hold
+    const busy = BUSY_SHAPES.has(s.shape) || (s.pattern !== "none" && s.patternArea === "shape") || s.shapeOutline || ["outline", "echo"].includes(s.titleStyle);
+    const ok = () => !(busy && overlap(shapeRect(), r.title, 1)) && checks.every(([q, cols, t]) => !q || !overlap(shapeRect(), q) ||
       cols.every(c => contrast(c, mixRgb(bg, hexToRgb(s.shapeColor === "ink" ? s.ink : s.accent), s.shapeAmt / 100)) >= t));
+    // first try moving it somewhere the words aren't (off-centre and half off the edge is a classic look anyway)
+    if (!ok()) {
+      const spots = [[78, 22], [22, 78], [88, 10], [10, 90], [92, 92], [8, 8], [97, 50], [3, 50], [50, 3], [50, 98]];
+      const start = Math.floor(rnd() * spots.length), x0 = s.shapeX, y0 = s.shapeY, z0 = s.shapeSize;
+      for (const z of [z0, Math.min(z0, 58), Math.min(z0, 44)]) {
+        s.shapeSize = z;
+        for (let i = 0; i < spots.length && !ok(); i++) { [s.shapeX, s.shapeY] = spots[(start + i) % spots.length]; }
+        if (ok()) break;
+      }
+      if (!ok()) { s.shapeX = x0; s.shapeY = y0; s.shapeSize = z0; }
+    }
     if (!ok()) s.shapeColor = s.shapeColor === "ink" ? "accent" : "ink";
     while (!ok() && s.shapeAmt > 30) s.shapeAmt -= 5;
     // stripes behind the title only ever look busy
-    if (!ok() || (s.shape === "bars" && overlap(shapeRect(), r.title))) s.shape = "none";
+    if (!ok()) s.shape = "none";
   }
+  // a pattern that lived inside a shape that's gone fills the ground instead (and is quietened below)
+  if (s.shape === "none" && s.patternArea === "shape" && !hard.backdrop) s.patternArea = "full";
   if (!hard.backdrop && s.wash !== "none") {
     const bg = hexToRgb(s.bg), ac = hexToRgb(s.accent), cols = titleCols();
     const want = ["outline", "echo"].includes(s.titleStyle) ? 4 : 3;
     while (s.washAmt > 15 && cols.some(tc => contrast(tc, mixRgb(bg, ac, 0.9 * s.washAmt / 100)) < want)) s.washAmt -= 5;
+  }
+  // Pattern behind type: keep it quiet where the words are (loudness = strength × how busy it is).
+  if (!hard.backdrop && s.pattern !== "none") {
+    const P0 = patternList().find(x => x.id === s.pattern), busy = P0 ? P0.busy ?? 0.5 : 0.5;
+    const area = patternRect(s), hollow = ["outline", "echo"].includes(s.titleStyle);
+    const under = (q) => q && (s.patternArea === "shape" ? overlap(R(s.shapeX - s.shapeSize / 2, s.shapeY - s.shapeSize / 2, s.shapeSize, s.shapeSize), q) : area.some(a => overlap(a, q)));
+    const loudTitle = r.title && under(r.title) && s.titleStyle !== "block";
+    const cap = loudTitle ? (hollow || FINE.has(s.font) ? 0.12 : 0.2) : (under(r.artist) || under(r.footer)) ? 0.3 : 0.55;
+    if (busy * s.patternAmt / 100 > cap) s.patternAmt = Math.max(8, Math.floor(cap / busy * 100));
+    if (loudTitle && hollow && busy > 0.6 && !hard.type) s.titleStyle = "solid";
   }
   // Type over the picture: dim it (or re-tone it) until the worst spot still reads.
   if (!hard.picture && window.SleeveRender) {
@@ -483,6 +591,8 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
       if (r.footer && overlap(box, r.footer)) n.push([textRgb(s, "footerColor"), 2.4]);
       return n;
     };
+    // echo's ghost lines get lost in a photo
+    if (!hard.type && s.titleStyle === "echo" && r.title && overlap(box, r.title)) s.titleStyle = "shadow";
     let need = needs();
     // A spot-coloured line over the picture rarely holds up: go back to ink before dimming everything.
     if (!hard.type && need.length) {
@@ -546,6 +656,25 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
 /* "More like this": a clear step in one direction (palette, type, layout or picture), sometimes with a lighter
    change to motif, border or backdrop. Colour and type changes stay related half the time. */
 const GROUPS = ["colour", "type", "layout", "motif", "border", "backdrop", "picture"];
+/* Which settings belong to which group, for laying "keep mine" over a saved look. */
+const GROUP_KEYS = {
+  colour: ["bg", "ink", "accent", "paletteName"],
+  type: ["font", "bodyFont", "artistFont", "artistCase", "artistColor", "artistWeight", "artistTrack", "artistSize", "titleStyle", "titleColor", "titleCase",
+    "leading", "tracking", "titleAccent", "footerColor", "footerOpacity", "footerSize", "footerTrack", "footerCase"],
+  layout: ["align", "margin", "artistY", "motifY", "titlePos", "titleDy", "titleSize", "footerY", "footerPos", "titleAlign", "artistAlign", "footerAlign", "motifAlign",
+    "titleX", "artistX", "footerX", "motifX", "artistRotate"],
+  motif: ["motifKind", "motifSize", "motifPitch", "count", "missing", "missingStyle"],
+  border: ["frame", "frameStyle", "frameInset", "frameWidth", "frameOpacity", "frameColor", "barcodeStyle"],
+  backdrop: ["wash", "washAmt", "shape", "shapeAmt", "shapeSize", "shapeX", "shapeY", "shapeColor", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale",
+    "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed", "texture", "textureAmt", "grain", "vignette"],
+  picture: ["imgMode", "imgTone", "dim", "imgPosterize", "imgContrast", "imgBlur", "imgBoxSize", "imgBoxX", "imgBoxY"],
+};
+/* A saved look with the locked groups taken from `mine` instead. */
+function keepMine(look, mine, locks) {
+  const o = { ...look };
+  for (const g of GROUPS) if (locks[g]) for (const k of GROUP_KEYS[g]) if (k in mine) o[k] = mine[k];
+  return o;
+}
 function mutate(state, seed, locks = {}, opts = {}) {
   const rnd = mulberry32((seed * 40503 + 17) >>> 0);
   const major = [["colour", 3], ["type", 3], ["layout", 2.5], ["picture", 1.5]].filter(([g]) => !locks[g]);
@@ -574,5 +703,5 @@ if (!document.querySelector("link[data-looks-fonts]")) {
   const l = document.createElement("link"); l.rel = "stylesheet"; l.href = GOOGLE_CSS; l.dataset.looksFonts = "1"; document.head.appendChild(l);
 }
 
-window.Looks = { PALETTES, FONTS, FONT, BODY_FONTS, GOOGLE_CSS, LAYOUTS, LAYOUT_KEYS, FRAME_STYLES, MOTIFS, MOODS, FEELS, GROUPS, moodsOf, makePalette, randomize, mutate };
+window.Looks = { dealer, patternRect, GROUP_KEYS, keepMine, PALETTES, FONTS, FONT, BODY_FONTS, GOOGLE_CSS, LAYOUTS, LAYOUT_KEYS, FRAME_STYLES, MOTIFS, MOODS, FEELS, GROUPS, moodsOf, makePalette, randomize, mutate };
 })();

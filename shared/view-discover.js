@@ -35,9 +35,10 @@ const cards = new Set();     // live card elements
 /* What a card shows, rebuilt from its recipe so new words reach every card. */
 function stateFor(card) {
   const base = App.state(), r = card._recipe, opts = { mood: prefs.mood, feel: prefs.feel };
-  if (r.kind === "seed") return Looks.randomize(base, r.seed, prefs.locks, opts);
+  // dealt from shuffled decks, so neighbouring cards don't repeat the same shape, pattern, face or placement
+  if (r.kind === "seed") return Looks.randomize(base, r.seed, prefs.locks, { ...opts, deal: { i: r.seed - prefs.base, base: prefs.base } });
   if (r.kind === "family") return Looks.mutate({ ...base, ...r.parent }, r.seed, prefs.locks, opts);
-  return { ...base, ...r.look };   // flagged
+  return { ...base, ...Looks.keepMine(App.completeLook(r.look), base, prefs.locks) };   // flagged, wearing whatever "keep mine" holds
 }
 
 function makeCard(recipe, label) {
@@ -51,8 +52,9 @@ function makeCard(recipe, label) {
     h("span", { class: "dc-seed" }, label), heart, h("div", { class: "dc-bar" }, edit, like));
   card._recipe = recipe; card._img = img; card._heart = heart; card._ver = -1; card._label = label;
   const lookNow = () => card._look || SR.lookOf(stateFor(card));
-  pic.addEventListener("click", () => openLook(lookNow()));
-  edit.addEventListener("click", () => openLook(lookNow()));
+  const shown = () => SR.lookOf(stateFor(card));   // what the card shows (a flag with "keep mine" laid over it)
+  pic.addEventListener("click", () => openLook(shown()));
+  edit.addEventListener("click", () => openLook(shown()));
   heart.addEventListener("click", () => {
     const on = App.toggleFlag(lookNow());
     heart.setAttribute("aria-pressed", String(on));
@@ -75,7 +77,7 @@ function renderCard(card) {
   enqueue(async () => {
     if (g !== gen || !card.isConnected || card._ver === ver || !visible) return;
     const v = ver, st = stateFor(card);
-    card._look = SR.lookOf(st);
+    card._look = card._recipe.kind === "flag" ? card._recipe.look : SR.lookOf(st);   // a flagged card stays that flag
     await App.thumb(work, st);
     if (g !== gen || !card.isConnected) return;
     const blob = await new Promise(res => work.toBlob(res, "image/jpeg", 0.86));
@@ -132,10 +134,11 @@ function restart() {
   window.__dcFirst = { n: 0, t0: performance.now(), t: null };
   clearGrid(); updateHead();
   if (mode === "flagged") {
-    const list = App.flagged();
-    if (!list.length) showEmptyFlagged();
+    const all = App.flagged(), list = all.filter(matches);
+    if (!all.length) showEmptyFlagged();
+    else if (!list.length) grid.append(h("p", { class: "empty dc-empty" }, `None of your ${all.length} flagged looks match these filters.`));
     list.forEach((f, i) => { const c = makeCard({ kind: "flag", look: f.look }, f.name || "Look " + (i + 1)); c._look = f.look; grid.append(c); lazy.watch(c); });
-    countEl.textContent = `${list.length} flagged`;
+    countEl.textContent = list.length === all.length ? `${all.length} flagged` : `${list.length} of ${all.length} flagged`;
     sentinel.hidden = true;
   } else { sentinel.hidden = false; addBatch(); }
 }
@@ -162,7 +165,13 @@ function updateHead() {
     famBar.querySelector(".dc-famtitle").textContent = `More like ${fam.label}`;
     famBar.querySelector(".dc-up").hidden = family.length < 2;
   }
-  filterBar.classList.toggle("dc-dim", mode === "flagged");
+}
+/* Flagged looks go through the same mood and type-feel filters as new designs. */
+function matches(f) {
+  const l = f.look || {};
+  if (prefs.mood !== "any" && !(l.bg && Looks.moodsOf({ bg: l.bg, ink: l.ink, accent: l.accent }).includes(prefs.mood))) return false;
+  if (prefs.feel !== "any" && !(Looks.FONT[l.font] && Looks.FONT[l.font].feel === prefs.feel)) return false;
+  return true;
 }
 
 function mount(el) {

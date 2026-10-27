@@ -77,7 +77,13 @@ function pick(k, label, values, drawFn, o = {}) {
     b._draw = () => { const x = c.getContext("2d"); x.clearRect(0, 0, c.width, c.height); drawFn(x, v, c.width, c.height); };
   });
   const node = h("div", { class: "f" }, label ? h("span", { class: "legend" }, label) : null, grid);
-  return reg(node, o.show, () => grid.querySelectorAll("button").forEach(b => { b.setAttribute("aria-pressed", String(b.dataset.v === String(st[k]))); b._draw(); }));
+  // the little pictures only depend on the colours and a few settings: repaint when those change, not on every slider tick
+  const sig = () => [st.bg, st.ink, st.accent, st.font, st.titleCase, st.patternSeed, st.label, st.logoMode, st.bodyFont, st.pattern, st.patternArea, logo ? 1 : 0].join("|");
+  let drawn = null;
+  return reg(node, o.show, () => {
+    const now = sig(), paint = now !== drawn; drawn = now;
+    grid.querySelectorAll("button").forEach(b => { b.setAttribute("aria-pressed", String(b.dataset.v === String(st[k]))); if (paint) b._draw(); });
+  });
 }
 function fontPick(k, label, o = {}) {
   const list = h("div", { class: "dz-fonts", role: "listbox", "aria-label": label });
@@ -115,9 +121,13 @@ function drawTitleStyle(x, v, w, hh) {
   // render synchronously isn't possible; draw a cached copy when it arrives
   SR.render(c, fake, null).then(() => { x.clearRect(0, 0, w, hh); x.drawImage(c, 0, -w * 0.2, w, w); });
 }
-function drawWash(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, wash: v, washAmt: 90, shape: "none", texture: "none" }, cols().bg, ink, spot); }
-function drawShape(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, wash: "none", shape: v, shapeAmt: 95, shapeSize: 60, shapeX: 50, shapeY: 50, texture: "none" }, cols().bg, ink, spot); }
-function drawTexture(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, wash: "none", shape: "none", texture: v, textureAmt: 100 }, cols().bg, ink, spot); x.scale(1, 1); }
+function drawWash(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, pattern: "none", shapeOutline: false, shapeRot: 0, wash: v, washAmt: 90, shape: "none", texture: "none" }, cols().bg, ink, spot); }
+function drawPatternMini(x, v, w, hh) {
+  miniGround(x, w, hh); if (v === "none" || !window.Patterns) return; const { bg, ink, spot } = cols();
+  try { Patterns.draw(x, w, hh, v, { S: w, scale: 60, angle: 0, fg: ink, fg2: spot, bg, alpha: 0.8, seed: st.patternSeed || 1 }); } catch (e) {}
+}
+function drawShape(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, pattern: "none", wash: "none", shape: v, shapeAmt: 95, shapeSize: 60, shapeX: 50, shapeY: 50, texture: "none" }, cols().bg, ink, spot); }
+function drawTexture(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, pattern: "none", shapeOutline: false, shapeRot: 0, wash: "none", shape: "none", texture: v, textureAmt: 100 }, cols().bg, ink, spot); x.scale(1, 1); }
 function drawBarcodeMini(x, v, w, hh) {
   miniGround(x, w, hh); const { bg, ink, spot } = cols();
   x.save(); x.translate(0, 0); SR.drawBarcode(x, w * 3.2, w * 0.92, hh * 0.86, '"IBM Plex Mono", monospace', bg, ink, { ...st, barcodeStyle: v, barcodeSize: 100 }, spot); x.restore();
@@ -219,7 +229,8 @@ function panelFor(t) {
   if (t === "picture") P.push(...picturePanel());
   if (t === "label") P.push(...labelPanel());
   if (t === "marks") {
-    const MOT = [["none", "None"], ...L.MOTIFS.map(m => [m, m[0].toUpperCase() + m.slice(1)])];
+    const MOT = [["none", "None"], ...L.MOTIFS.map(m => [m, m[0].toUpperCase() + m.slice(1)]),
+      ...((window.Glyphs && Glyphs.MARKS) || []).filter(m => !L.MOTIFS.includes(m.id)).map(m => [m.id, m.name])];
     P.push(group(null, pick("motifKind", "Marks", MOT, drawMotifMini, { rebuild: true })));
     if (st.motifKind !== "none") {
       P.push(group("Count",
@@ -238,10 +249,24 @@ function panelFor(t) {
         row(range("frameOpacity", "Strength", 5, 100, 1, { unit: "%", half: true, reset: 14 }), colourSeg("frameColor", "Colour", { half: true }))] : [])));
     P.push(group("Wash", pick("wash", null, [["none", "None"], ["top", "Top"], ["bottom", "Bottom"], ["radial", "Glow"], ["diagonal", "Diagonal"]], drawWash, { rebuild: true }),
       range("washAmt", "Strength", 0, 100, 1, { unit: "%", show: () => st.wash !== "none", reset: 45 })));
-    P.push(group("Big shape", pick("shape", null, [["none", "None"], ["circle", "Circle"], ["ring", "Ring"], ["square", "Square"], ["half", "Half"], ["bars", "Bars"]], drawShape, { rebuild: true }),
+    const SHAPES = window.Glyphs && Glyphs.SHAPES ? Glyphs.SHAPES.map(g => [g.id, g.name]) : [["circle", "Circle"], ["ring", "Ring"], ["square", "Square"], ["half", "Half"], ["bars", "Bars"]];
+    P.push(group("Big shape", h("div", { class: "dz-scroll" }, pick("shape", null, [["none", "None"], ...SHAPES], drawShape, { rebuild: true })),
       ...(st.shape !== "none" ? [row(range("shapeSize", "Size", 10, 140, 1, { unit: "%", half: true, reset: 55 }), range("shapeAmt", "Strength", 5, 100, 1, { unit: "%", half: true, reset: 85 })),
         row(range("shapeX", "Across", 0, 100, 1, { unit: "%", half: true, reset: 70 }), range("shapeY", "Down", 0, 100, 1, { unit: "%", half: true, reset: 38 })),
-        colourSeg("shapeColor", "Colour")] : [])));
+        row(colourSeg("shapeColor", "Colour", { half: true }), range("shapeRot", "Turn", -180, 180, 1, { unit: "°", half: true, reset: 0, show: () => !!window.Glyphs })),
+        check("shapeOutline", "Line drawing instead of solid", { show: () => !!window.Glyphs })] : [])));
+    if (window.Patterns) {
+      const PATS = Patterns.LIST.map(p => [p.id, p.name]);
+      P.push(group("Pattern", h("div", { class: "dz-scroll" }, pick("pattern", null, [["none", "None"], ...PATS], drawPatternMini, { rebuild: true })),
+        ...(st.pattern !== "none" ? [
+          seg("patternArea", "Where", [["full", "All over"], ["band", "Band"], ["top", "Top"], ["bottom", "Bottom"], ["left", "Left"], ["right", "Right"], ["edge", "Edges"], ["shape", "In shape"]], { rebuild: true }),
+          range("patternPos", st.patternArea === "band" ? "Band height" : "Split at", 10, 90, 1, { unit: "%", reset: 50, show: () => ["band", "top", "bottom", "left", "right"].includes(st.patternArea) }),
+          seg("patternColor", "Colour", [["ink", "Ink"], ["accent", "Spot"], ["duo", "Both"]]),
+          row(range("patternAmt", "Strength", 3, 100, 1, { unit: "%", half: true, reset: 35 }), range("patternScale", "Scale", 40, 220, 5, { unit: "%", half: true, reset: 100 })),
+          row(range("patternAngle", "Turn", -90, 90, 1, { unit: "°", half: true, reset: 0 }), h("div", { class: "f half" }, h("span", { class: "legend" }, "Variation"),
+            row(btn("Reroll", () => set("patternSeed", ((st.patternSeed || 1) * 7 + 13) % 9973 + 1)))))] : []),
+        st.pattern !== "none" && st.patternArea === "shape" && st.shape === "none" ? hint("Pick a big shape above for the pattern to fill.") : null));
+    }
     P.push(group("Texture", pick("texture", null, [["none", "None"], ["halftone", "Halftone"], ["lines", "Lines"], ["grid", "Grid"]], drawTexture, { rebuild: true }),
       range("textureAmt", "Strength", 0, 100, 1, { unit: "%", show: () => st.texture !== "none", reset: 45 }),
       row(range("grain", "Grain", 0, 100, 1, { half: true, reset: 28 }), range("vignette", "Vignette", 0, 100, 1, { half: true, reset: 55 }))));
