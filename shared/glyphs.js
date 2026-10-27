@@ -67,7 +67,8 @@ const pool = {};
 function scratch(name, w, h) {
   let c = pool[name];
   if (!c) c = pool[name] = document.createElement("canvas");
-  if (c.width < w || c.height < h) { c.width = Math.max(c.width, w); c.height = Math.max(c.height, h); }
+  // grow to fit, and shrink back after a big export so small draws stay cheap
+  if (c.width < w || c.height < h || c.width * c.height > 4 * Math.max(w * h, 256 * 256)) { c.width = Math.max(1, w); c.height = Math.max(1, h); }
   const g = c.getContext("2d");
   g.restore(); g.save();
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;

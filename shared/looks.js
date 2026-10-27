@@ -258,6 +258,17 @@ function dealer(deal, rnd) {
     const order = list.map((_, i) => i);
     for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
     const round = Math.floor(deal.i / list.length), at = deal.i % list.length;
+    const passOrder = (n) => {
+      const o = list.map((_, i) => i), r0 = n ? mulberry32((SP.hashStr(key) + n * 7919 + (deal.base | 0)) >>> 0) : mulberry32((SP.hashStr(key) ^ Math.imul(deal.base | 0, 2654435761)) >>> 0);
+      for (let i = o.length - 1; i > 0; i--) { const j = Math.floor(r0() * (i + 1)); [o[i], o[j]] = [o[j], o[i]]; }
+      return o;
+    };
+    if (list.length > 1) {
+      // each pass is its own shuffle; a pass that would open with the card the last one ended on swaps its first two
+      const o = passOrder(round);
+      if (round && list[passOrder(round - 1)[list.length - 1]] === list[o[0]]) [o[0], o[1]] = [o[1], o[0]];
+      return list[o[at]];
+    }
     // each pass through the deck is reshuffled, so neighbours differ between passes too
     if (round) { const r2 = mulberry32((SP.hashStr(key) + round * 7919 + (deal.base | 0)) >>> 0); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(r2() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; } }
     return list[order[at]];

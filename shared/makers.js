@@ -35,7 +35,7 @@ function putClip(ctx, txt, x, y, size, face, weight, track, colour, alpha, maxW,
 function ground(ctx, W, H, st, k = 0.6, shape = false) {
   const { bg, ink, spot } = cols(st);
   ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, 0, W, H);
-  SR.drawBackdrop(ctx, W, H, shape ? st : { ...st, shape: "none" }, bg, ink, spot, k);
+  SR.drawBackdrop(ctx, W, H, shape ? st : { ...st, shape: "none", pattern: st.patternArea === "edge" ? st.pattern : "none" }, bg, ink, spot, k);   // patterns only as an edge border: they would sit behind words here
 }
 function finish(ctx, W, H, st, frame = false) {
   const { bg, ink, spot } = cols(st);
@@ -105,7 +105,7 @@ async function vinyl(e, side, D) {
   await SR.loadFonts(st);
   const r = D / 2, cx = r, cy = r, bfn = bodyOf(st);
   ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, 0, D, D);
-  SR.drawBackdrop(ctx, D, D, { ...st, shape: "none" }, bg, ink, spot, 0.7);
+  SR.drawBackdrop(ctx, D, D, { ...st, shape: "none", pattern: "none" }, bg, ink, spot, 0.7);
   ctx.strokeStyle = rgba(ink, 0.22); ctx.lineWidth = D * 0.003; ctx.beginPath(); ctx.arc(cx, cy, r * 0.93, 0, Math.PI * 2); ctx.stroke();
   ctx.textBaseline = "alphabetic";
   put(ctx, SR.applyCase(st.artist, st.artistCase || "upper"), cx, D * 0.25, D * 0.034, st.artistFont || bfn, "700", 0.3, ink, 1, D * 0.5, "c");
@@ -244,7 +244,7 @@ async function promo(e, id, scale = 1) {
     const sy = W, sh = H - W, m = W * 0.06, split = W * 0.58;
     ctx.fillStyle = rgba(bg, 1); ctx.fillRect(0, sy, W, sh);
     ctx.save(); ctx.beginPath(); ctx.rect(0, sy, W, sh); ctx.clip();
-    SR.drawBackdrop(ctx, W, H, { ...st, shape: "none" }, bg, ink, spot, 0.35); ctx.restore();
+    SR.drawBackdrop(ctx, W, H, { ...st, shape: "none", pattern: "none" }, bg, ink, spot, 0.35); ctx.restore();
     ctx.fillStyle = rgba(spot, 1); ctx.fillRect(0, sy, W, Math.max(4, H * 0.006));
     const big = cta || tag, colW = split - m * 1.5;
     if (cta && tag !== cta) put(ctx, tag, m, sy + sh * 0.3, sh * 0.075, bfn, "700", 0.3, ink, 0.7, colW);

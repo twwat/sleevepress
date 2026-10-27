@@ -38,7 +38,7 @@ function stateFor(card) {
   // dealt from shuffled decks, so neighbouring cards don't repeat the same shape, pattern, face or placement
   if (r.kind === "seed") return Looks.randomize(base, r.seed, prefs.locks, { ...opts, deal: { i: r.seed - prefs.base, base: prefs.base } });
   if (r.kind === "family") return Looks.mutate({ ...base, ...r.parent }, r.seed, prefs.locks, opts);
-  return { ...base, ...Looks.keepMine(r.look, base, prefs.locks) };   // flagged, wearing whatever "keep mine" holds
+  return { ...base, ...Looks.keepMine(App.completeLook(r.look), base, prefs.locks) };   // flagged, wearing whatever "keep mine" holds
 }
 
 function makeCard(recipe, label) {

@@ -40,6 +40,7 @@ function commit(st, opts = {}) {
 }
 /* Apply a look (sleeve look keys + colours) to the current release, keeping its words and image placement. */
 function applyLook(look, opts = {}) {
+  look = completeLook(look);
   const st = { ...state() };
   for (const k of SR.LOOK_KEYS) if (k in look) st[k] = look[k];
   for (const k of SR.PALETTE_KEYS) if (look[k]) st[k] = look[k];
@@ -47,15 +48,24 @@ function applyLook(look, opts = {}) {
 }
 
 /* ---------- flagged looks ---------- */
-const lookId = (look) => "L" + SP.hashStr(JSON.stringify(SR.LOOK_KEYS.map(k => look[k])) + look.bg + look.ink + look.accent).toString(36);
+/* Keys added after looks were first flagged: left out of the id while unused, so older flags keep their ids. */
+const LATER_KEYS = new Set(["shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale", "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed"]);
+function lookId(look) {
+  const D = SR.SLEEVE_DEFAULTS, noPattern = !look.pattern || look.pattern === "none";
+  const keys = SR.LOOK_KEYS.filter(k => !LATER_KEYS.has(k) || !(look[k] === undefined || look[k] === D[k] || (noPattern && k.startsWith("pattern"))));
+  return "L" + SP.hashStr(JSON.stringify(keys.map(k => look[k])) + look.bg + look.ink + look.accent).toString(36);
+}
+/* A saved look with any settings it predates filled from the defaults. */
+function completeLook(look) { const o = { ...look }; for (const k of SR.LOOK_KEYS) if (!(k in o)) o[k] = SR.SLEEVE_DEFAULTS[k]; return o; }
+const sameLook = (l, id) => l.id === id || (l.look && lookId(l.look) === id);
 function flagged() { return SP.get().looks; }
-function isFlagged(look) { const id = lookId(look); return flagged().some(l => l.id === id); }
+function isFlagged(look) { const id = lookId(look); return flagged().some(l => sameLook(l, id)); }
 function flag(look, name) {
-  const id = lookId(look); if (flagged().some(l => l.id === id)) return id;
+  const id = lookId(look); if (flagged().some(l => sameLook(l, id))) return id;
   SP.set("looks", [{ id, name: name || look.paletteName || "Look", look: { ...look }, ts: Date.now() }, ...flagged()]);
   return id;
 }
-function unflag(idOrLook) { if (!idOrLook) return; const id = typeof idOrLook === "string" ? idOrLook : lookId(idOrLook); SP.set("looks", flagged().filter(l => l.id !== id)); }
+function unflag(idOrLook) { if (!idOrLook) return; const id = typeof idOrLook === "string" ? idOrLook : lookId(idOrLook); SP.set("looks", flagged().filter(l => !sameLook(l, id))); }
 function toggleFlag(look) { if (isFlagged(look)) { unflag(look); return false; } flag(look); return true; }
 
 /* ---------- pictures ---------- */
@@ -200,6 +210,6 @@ function start() {
   mountBar(); window.addEventListener("hashchange", route); route();
 }
 
-window.App = { state, commit, applyLook, checkpoint, undo, redo, view, go, start, lookId, flagged, isFlagged, flag, unflag, toggleFlag,
+window.App = { completeLook, state, commit, applyLook, checkpoint, undo, redo, view, go, start, lookId, flagged, isFlagged, flag, unflag, toggleFlag,
   smallImage, thumb, env, saveToLibrary, nextRelease, h, lazy, queue, current: () => current };
 })();

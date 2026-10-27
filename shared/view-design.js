@@ -77,7 +77,13 @@ function pick(k, label, values, drawFn, o = {}) {
     b._draw = () => { const x = c.getContext("2d"); x.clearRect(0, 0, c.width, c.height); drawFn(x, v, c.width, c.height); };
   });
   const node = h("div", { class: "f" }, label ? h("span", { class: "legend" }, label) : null, grid);
-  return reg(node, o.show, () => grid.querySelectorAll("button").forEach(b => { b.setAttribute("aria-pressed", String(b.dataset.v === String(st[k]))); b._draw(); }));
+  // the little pictures only depend on the colours and a few settings: repaint when those change, not on every slider tick
+  const sig = () => [st.bg, st.ink, st.accent, st.font, st.titleCase, st.patternSeed, st.label, st.logoMode, st.bodyFont, st.pattern, st.patternArea, logo ? 1 : 0].join("|");
+  let drawn = null;
+  return reg(node, o.show, () => {
+    const now = sig(), paint = now !== drawn; drawn = now;
+    grid.querySelectorAll("button").forEach(b => { b.setAttribute("aria-pressed", String(b.dataset.v === String(st[k]))); if (paint) b._draw(); });
+  });
 }
 function fontPick(k, label, o = {}) {
   const list = h("div", { class: "dz-fonts", role: "listbox", "aria-label": label });
