@@ -214,6 +214,19 @@ function rects(s) {
   return out;
 }
 
+/* The biggest strip along one side of the sleeve with no words in it, for a full-strength pattern. */
+function boldArea(s) {
+  const boxes = Object.values(rects(s)), gap = 3, min = 24, out = [];
+  if (!boxes.length) return { area: "left", pos: 50 };
+  const top = Math.min(...boxes.map(b => b.y)) - gap, bottom = Math.max(...boxes.map(b => b.y + b.h)) + gap;
+  const left = Math.min(...boxes.map(b => b.x)) - gap, right = Math.max(...boxes.map(b => b.x + b.w)) + gap;
+  if (top >= min) out.push({ area: "top", pos: Math.round(top), size: top });
+  if (100 - bottom >= min) out.push({ area: "bottom", pos: Math.round(bottom), size: 100 - bottom });
+  if (left >= min) out.push({ area: "left", pos: Math.round(left), size: left });
+  if (100 - right >= min) out.push({ area: "right", pos: Math.round(right), size: 100 - right });
+  return out.sort((a, b) => b.size - a.size)[0] || null;
+}
+
 /* Shapes with inner detail or line work: they read as noise behind words. */
 const BUSY_SHAPES = new Set(["bars", "target", "scope", "rays", "chevrons", "squares", "spiral", "wave", "honeycomb", "halftone", "sunset", "web", "snowflake",
   "glass", "rosewindow", "swords", "shuriken", "starburst", "sun", "discs", "eye"]);
@@ -355,7 +368,8 @@ function randomize(state, seed, locks = {}, opts = {}) {
     s.wash = chance(0.35) ? pick(["top", "bottom", "radial", "diagonal"]) : "none"; s.washAmt = between(25, pic ? 55 : 70);
     // One scheme per sleeve: plain ground, a big shape, a pattern, or a pattern working with a shape.
     const pats = patternList();
-    const scheme = dealt(pic ? "scheme:pic" : "scheme", deck(pats.length ? (pic ? [["plain", 4], ["shape", 2], ["pattern", 2], ["combo", 1]] : [["plain", 2], ["shape", 3], ["pattern", 3], ["combo", 2]]) : [["plain", 3], ["shape", 2]]));
+    // "bold": the pattern is the hero, full strength on the part of the sleeve the words leave free
+    const scheme = dealt(pic ? "scheme:pic" : "scheme", deck(pats.length ? (pic ? [["plain", 4], ["shape", 2], ["pattern", 2], ["combo", 1], ["bold", 1]] : [["plain", 2], ["shape", 3], ["pattern", 3], ["combo", 2], ["bold", 2]]) : [["plain", 3], ["shape", 2]]));
     s.shape = "none"; s.pattern = "none"; s.shapeOutline = false; s.shapeRot = 0;
     if (scheme === "shape" || scheme === "combo") {
       s.shape = dealt("shape", shapeDeck());
@@ -363,8 +377,11 @@ function randomize(state, seed, locks = {}, opts = {}) {
       s.shapeColor = chance(0.75) ? "accent" : "ink";
       s.shapeOutline = scheme === "shape" && chance(0.22); s.shapeRot = chance(0.3) ? between(-25, 25) : 0;
     }
-    if (scheme === "pattern" || scheme === "combo") {
-      const P0 = dealt("pattern", pats); s.pattern = P0.id;
+    const bold = scheme === "bold" ? boldArea(s) : null;
+    if (scheme === "pattern" || scheme === "combo" || scheme === "bold") {
+      // family first (plaid, camo, animal, checks, dots…), then a pattern within it, so every family gets its share
+      const fams = [...new Set(pats.map(x => x.family))], fam = dealt(bold ? "patternFamily:bold" : "patternFamily", fams);
+      const P0 = dealt("pattern:" + fam, pats.filter(x => x.family === fam)); s.pattern = P0.id;
       s.patternSeed = between(1, 9999); s.patternScale = between(65, 150, 5);
       s.patternAngle = chance(0.25) ? pick([45, -45, 30, 15, -15, 90]) : 0;
       s.patternColor = dealt("patternColor", deck([["ink", 3], ["accent", 2], ["duo", 2]]));
@@ -374,6 +391,8 @@ function randomize(state, seed, locks = {}, opts = {}) {
       // louder patterns get less ink; a picture underneath halves it again
       const busy = P0.busy ?? 0.5;
       s.patternAmt = Math.round(between(30, 75) * (1 - busy * 0.55) * (pic ? 0.6 : 1));
+      if (bold) { s.patternArea = bold.area; s.patternPos = bold.pos; s.patternAmt = between(70, 100); s.patternScale = between(80, 170, 5); }
+      else if (scheme === "bold") { s.patternArea = "edge"; s.patternAmt = between(60, 90); }   // no free side: a strong pattern border instead
     }
     s.texture = chance(0.3) ? pick(["halftone", "lines", "grid"]) : "none"; s.textureAmt = between(25, 75);
     s.grain = between(8, 55); s.vignette = between(15, 75);
