@@ -715,7 +715,7 @@ function snowflakes(P) {
 
 function topo(P) {
   screen(P, (g) => {
-    const W = P.W, H = P.H, step = Math.max(3, P.S / 115), nx = Math.ceil(W / step) + 1, ny = Math.ceil(H / step) + 1;
+    const W = P.W, H = P.H, step = Math.max(3, P.S / 100), nx = Math.ceil(W / step) + 1, ny = Math.ceil(H / step) + 1;
     const noise = perlin(P.seed), fs = P.s * 0.42, ca = Math.cos(-P.ang), sa = Math.sin(-P.ang), cx = P.cx, cy = P.cy;
     const v = new Float32Array(nx * ny);
     for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
@@ -792,39 +792,39 @@ function topo(P) {
    ====================================================================== */
 const DEFS = [
   ["tartan", "Tartan", "fabric", 0.6, tartan],
-  ["gingham", "Gingham", "fabric", 0.55, gingham],
-  ["houndstooth", "Houndstooth", "fabric", 0.7, houndstooth],
-  ["herringbone", "Herringbone", "fabric", 0.6, herringbone],
-  ["basketweave", "Basketweave", "fabric", 0.65, basketweave],
-  ["checker", "Checkerboard", "check", 0.7, checker],
-  ["warpcheck", "Warped check", "check", 0.75, warpcheck],
-  ["harlequin", "Harlequin", "check", 0.65, harlequin],
+  ["gingham", "Gingham", "fabric", 0.5, gingham],
+  ["houndstooth", "Houndstooth", "fabric", 0.75, houndstooth],
+  ["herringbone", "Herringbone", "fabric", 0.45, herringbone],
+  ["basketweave", "Basketweave", "fabric", 0.7, basketweave],
+  ["checker", "Checkerboard", "check", 0.75, checker],
+  ["warpcheck", "Warped check", "check", 0.8, warpcheck],
+  ["harlequin", "Harlequin", "check", 0.7, harlequin],
   ["argyle", "Argyle", "check", 0.55, argyle],
   ["polka", "Polka dots", "dots", 0.35, polka],
   ["halftone", "Halftone field", "dots", 0.45, halftone],
-  ["confetti", "Confetti", "dots", 0.4, confetti],
+  ["confetti", "Confetti", "dots", 0.3, confetti],
   ["pinstripe", "Pinstripe", "lines", 0.2, pinstripe],
-  ["diagonal", "Diagonal stripes", "lines", 0.5, diagonal],
+  ["diagonal", "Diagonal stripes", "lines", 0.6, diagonal],
   ["chevron", "Chevron", "lines", 0.65, chevron],
   ["opwave", "Op-art waves", "lines", 0.8, opwave],
   ["concentric", "Concentric squares", "lines", 0.4, concentric],
-  ["moire", "Moiré rings", "lines", 0.55, moire],
-  ["sunburst", "Sunburst", "rays", 0.7, sunburst],
+  ["moire", "Moiré rings", "lines", 0.6, moire],
+  ["sunburst", "Sunburst", "rays", 0.75, sunburst],
   ["swirl", "Swirl", "rays", 0.8, swirl],
   ["seigaiha", "Seigaiha", "tile", 0.6, seigaiha],
   ["decofan", "Deco fans", "tile", 0.55, decofan],
-  ["quatrefoil", "Quatrefoil trellis", "tile", 0.45, quatrefoil],
+  ["quatrefoil", "Quatrefoil trellis", "tile", 0.4, quatrefoil],
   ["honeycomb", "Honeycomb", "tile", 0.3, honeycomb],
   ["triangles", "Triangle mosaic", "tile", 0.6, triangles],
-  ["brick", "Brick", "tile", 0.5, brick],
-  ["plus", "Plus field", "tile", 0.35, plus],
-  ["stars", "Star field", "tile", 0.35, stars],
-  ["memphis", "Memphis", "tile", 0.45, memphis],
-  ["terrazzo", "Terrazzo", "tile", 0.45, terrazzo],
+  ["brick", "Brick", "tile", 0.45, brick],
+  ["plus", "Plus field", "tile", 0.3, plus],
+  ["stars", "Star field", "tile", 0.3, stars],
+  ["memphis", "Memphis", "tile", 0.35, memphis],
+  ["terrazzo", "Terrazzo", "tile", 0.4, terrazzo],
   ["stainedglass", "Stained glass", "organic", 0.85, stainedglass],
   ["spiderweb", "Spiderweb", "organic", 0.3, spiderweb],
   ["snowflakes", "Snowflakes", "organic", 0.35, snowflakes],
-  ["topo", "Contours", "organic", 0.3, topo],
+  ["topo", "Contours", "organic", 0.35, topo],
 ];
 const BY_ID = {}; const LIST = [];
 for (const [id, name, family, busy, fn] of DEFS) { BY_ID[id] = fn; LIST.push({ id, name, family, busy }); }
