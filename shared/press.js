@@ -167,8 +167,20 @@ function mergeDefaults(saved) {
   return d;
 }
 let fresh = false;   // nothing was stored: a first visit (or storage was cleared)
+/* The demo release older versions started everyone on. Left untouched, it isn't anyone's work: start fresh instead. */
+function oldDemo(r) {
+  const rel = r && r.release || {};
+  return rel.artist === "DUPPY WIRE" && rel.title === "NINE\nNIGHT" && !r.libId && !(r.tracks && r.tracks.length);
+}
 function load() {
-  try { const raw = localStorage.getItem(KEY); if (raw) { db = mergeDefaults(JSON.parse(raw)); fresh = false; return db; } } catch (e) { setStatus("memory"); }
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      if (oldDemo(saved)) { db = DEFAULT(); db.looks = Array.isArray(saved.looks) ? saved.looks : []; fresh = true; return db; }
+      db = mergeDefaults(saved); fresh = false; return db;
+    }
+  } catch (e) { setStatus("memory"); }
   db = DEFAULT(); fresh = true; return db;
 }
 /* Writes are batched; `pending` marks a change that hasn't reached storage yet. */
