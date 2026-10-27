@@ -95,3 +95,4 @@
 .view-design .dz-layouts button:hover { border-color: var(--chalk-dim); color: var(--chalk); }
 .view-design .dz-layouts canvas { width: 100%; height: auto; display: block; }
 .view-design .dz-layouts small { font: 10px var(--f-mono); }
+.view-design .dz-scroll { max-height: 236px; overflow: auto; padding-right: 4px; }
