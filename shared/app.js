@@ -131,9 +131,18 @@ function route() {
 
 /* ---------- dialogs and menus ---------- */
 /* A modal: title, body (node or nodes), actions [{ label, primary, danger, onclick → false keeps it open }]. Esc / backdrop close it. */
-function modal({ title, body, actions = [], wide }) {
-  const close = () => { wrap.remove(); document.removeEventListener("keydown", esc); if (last && last.focus) last.focus(); };
-  const esc = (e) => { if (e.key === "Escape") close(); };
+function modal({ title, body, actions = [], wide, onClose }) {
+  const close = () => { if (!wrap.isConnected) return; if (onClose) onClose(); wrap.remove(); document.removeEventListener("keydown", esc); if (last && last.focus) last.focus(); };
+  const esc = (e) => {
+    if (e.key === "Escape") close();
+    if (e.key === "Tab") {   // keep focus inside the dialog
+      const f = [...box.querySelectorAll("button, input, textarea, select, [href], label.file-drop")].filter(x => !x.disabled && x.offsetParent !== null);
+      if (!f.length) return; const first = f[0], last2 = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last2.focus(); }
+      else if (!e.shiftKey && document.activeElement === last2) { e.preventDefault(); first.focus(); }
+      else if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    }
+  };
   const last = document.activeElement;
   const box = h("div", { class: "dlg" + (wide ? " wide" : ""), role: "dialog", "aria-modal": "true", "aria-label": title },
     h("h2", {}, title), h("div", { class: "dlg-body" }, body),
@@ -155,7 +164,7 @@ function menu(button, items) {
     if (open) return shut();
     const list = typeof items === "function" ? await items() : items;
     open = h("div", { class: "menu", role: "menu" }, ...list.map(it => it === "-" ? h("hr") : h("button", { type: "button", role: "menuitem", class: it.danger ? "danger" : null,
-      onclick: () => { shut(); it.onclick(); } }, h("span", {}, it.label), it.sub ? h("small", {}, it.sub) : null)));
+      onclick: () => { shut(); button.focus(); it.onclick(); } }, h("span", {}, it.label), it.sub ? h("small", {}, it.sub) : null)));
     document.body.append(open);
     const r = button.getBoundingClientRect(), w = Math.min(300, innerWidth - 16);
     Object.assign(open.style, { top: `${r.bottom + 6 + scrollY}px`, left: `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + scrollX}px`, width: `${w}px` });
@@ -167,12 +176,20 @@ function menu(button, items) {
 }
 
 /* ---------- "is this release saved in the library?" ---------- */
-const sigOf = (rec) => { const r = SP.clone(rec); delete r.looks; delete r.libId; delete r.saved; delete r.exported; return JSON.stringify(r); };
-let savedSig = null;
+/* The picture lives outside the record, so a change counter stands in for it. */
+let picV = 0; SP.cover.on(() => { picV++; });
+const sigOf = (rec) => { const r = SP.clone(rec); delete r.looks; delete r.libId; delete r.saved; delete r.exported; return JSON.stringify(r) + "|pic" + picV; };
+let savedSig = null;   // nothing to lose compared with this (just saved, opened or started)
+let libSig = null;     // what the library holds for this release, when it is in the library
 const statusFns = new Set();
-function markSaved() { savedSig = sigOf(SP.get()); statusFns.forEach(fn => fn()); }
-/* True when the current release has words or settings that aren't in the library. */
+const statusNow = () => statusFns.forEach(fn => fn());
+/* Saved to (or opened from) the library. */
+function markSaved() { savedSig = libSig = sigOf(SP.get()); statusNow(); }
+/* A fresh start: nothing to lose yet, but not in the library either. */
+function markClean() { savedSig = sigOf(SP.get()); libSig = null; statusNow(); }
+/* True when there are words, settings or a picture that would be lost. */
 function unsaved() { return savedSig !== sigOf(SP.get()); }
+function inLibrary() { return !!SP.get().libId && libSig === sigOf(SP.get()); }
 
 /* ---------- the words form (first run, New release, Defaults) ---------- */
 /* values pre-fill the fields; empty fields show an example in grey. */
@@ -216,7 +233,7 @@ async function newRelease() {
       h("p", { class: "hint" }, "To have fields filled in for you every time: ⚙ → Defaults for new releases.")],
       actions: [{ label: "Cancel" }, { label: "Start", primary: true, onclick: async () => {
         const v = form.values(); if (!v.artist.trim() && !v.title.trim()) { SP.toast("Type an artist or a title first"); return false; }
-        await SP.reset({ ...completeWords(v), artist: v.artist, title: v.title }, { freshLook: !keepLook.checked }); clearHistory(); markSaved();
+        await SP.reset({ ...completeWords(v), artist: v.artist, title: v.title }, { freshLook: !keepLook.checked }); clearHistory(); markClean();
         go("discover"); SP.toast("New release started. Pick a design you like, or open Design.");
       } }] });
   };
@@ -225,9 +242,14 @@ async function newRelease() {
     actions: [{ label: "Cancel" }, { label: "Don't save" , onclick: () => { setTimeout(go2, 0); } }, { label: "Save, then new", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(go2, 0); } }] });
 }
 function openFile() {
-  const inp = h("input", { type: "file", accept: ".json,application/json", hidden: true });
-  inp.addEventListener("change", async () => { const f = inp.files[0]; inp.remove(); if (!f) return; const kind = await SP.importFile(f); if (kind === "release") { clearHistory(); markSaved(); go("design"); } else if (kind === "library") go("library"); });
-  document.body.append(inp); inp.click();
+  const pick = () => {
+    const inp = h("input", { type: "file", accept: ".json,application/json", hidden: true });
+    inp.addEventListener("change", async () => { const f = inp.files[0]; inp.remove(); if (!f) return; const kind = await SP.importFile(f); if (kind === "release") { clearHistory(); markClean(); go("design"); } else if (kind === "library") go("library"); });
+    document.body.append(inp); inp.click();
+  };
+  if (!unsaved()) return pick();
+  modal({ title: "Open a file?", body: h("p", {}, "A release file replaces the one you're on, which has changes that aren't in your library. (A backup file only adds to your library.)"),
+    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: () => { setTimeout(pick, 0); } }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(pick, 0); } }] });
 }
 async function openSaved(id) {
   const doOpen = async () => { if (await SP.library.open(id)) { markSaved(); go("design"); SP.toast("Opened"); } };
@@ -255,14 +277,14 @@ function welcome() {
   const form = wordsForm(ownDefaults(), { footer: false });
   const asDefault = h("input", { type: "checkbox" });
   const done = () => { try { localStorage.setItem("sleevepress.welcomed", "1"); } catch (e) {} };
-  modal({ title: "Start a release", wide: true, body: [
+  modal({ title: "Start a release", wide: true, onClose: done, body: [
       h("p", {}, "Type your words and Sleeve Press makes endless cover designs from them. Everything stays in this browser."),
       form.el, pictureField(), h("label", { class: "check" }, asDefault, "Also use these as my defaults for new releases")],
     actions: [{ label: "Just show me an example", onclick: done },
       { label: "Show me designs", primary: true, onclick: async () => {
         const v = form.values(); if (!v.artist.trim() && !v.title.trim()) { SP.toast("Type an artist or a title first"); return false; }
         const w = completeWords(v);
-        SP.replace({ ...SP.get(), release: { ...SP.get().release, ...w } }); clearHistory();
+        SP.replace({ ...SP.get(), release: { ...SP.get().release, ...w } }); clearHistory(); markClean();
         if (asDefault.checked) { const { title, ...rest } = w; try { localStorage.setItem("sleevepress.defaults", JSON.stringify(rest)); } catch (e) {} }
         done(); go("discover");
       } }] });
@@ -309,13 +331,13 @@ function mountBar() {
   const st = $("status");
   // one plain sentence: is the work kept, and is it in the library
   const showStatus = () => {
-    const mem = SP.status() !== "browser", lib = !unsaved();
+    const mem = SP.status() !== "browser", lib = inLibrary();
     st.className = "status " + (mem ? "memory" : lib ? "browser" : "pending");
     st.textContent = mem ? "Not being kept" : lib ? "Saved in library" : "Not in library yet";
     st.title = mem ? "This browser won't keep data for this page (private window or file:// restrictions). Use ⚙ → Back up everything to keep your work."
       : lib ? "This release is in your library. Changes are kept in this browser as you go." : "Your changes are kept in this browser as you go. Press Save to put this release in your library.";
   };
-  SP.onStatus(showStatus); SP.on(SP.debounce(showStatus, 300)); statusFns.add(showStatus); showStatus();
+  SP.onStatus(showStatus); SP.on(SP.debounce(showStatus, 300)); SP.cover.on(showStatus); statusFns.add(showStatus); showStatus();
   $("saveBtn").addEventListener("click", () => saveToLibrary());
   $("newBtn").addEventListener("click", newRelease);
   menu($("openBtn"), async () => {
@@ -384,12 +406,13 @@ function migrateLooks() {
 function trackPicture() { const upd = async () => { Looks.picture = !!(await SP.cover.image()); }; SP.cover.on(upd); upd(); }
 function start() {
   trackPicture();
-  if (SP.isFresh()) markSaved();   // the example release isn't "unsaved work"
+  if (SP.isFresh()) markClean();   // the example release isn't work anyone would lose
   // whichever way a saved release gets opened (top bar, Library tab, a restore), compare against what's stored for it
   let lastLib;
   const syncSaved = async () => {
     const id = SP.get().libId; if (id === lastLib) return; lastLib = id; if (!id) return;
-    const e = await SP.vault.get("lib." + id); if (e && SP.get().libId === id) { savedSig = sigOf(e.record); statusFns.forEach(fn => fn()); }
+    // opened from the library: what's on screen now is what the library holds
+    const e = await SP.vault.get("lib." + id); if (e && SP.get().libId === id) markSaved();
   };
   SP.on(syncSaved); syncSaved();
   migrateLooks(); SP.on(() => { if (SP.get().looks.some(l => !l || !l.id)) migrateLooks(); });
