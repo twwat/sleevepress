@@ -76,6 +76,7 @@ function renderCard(card) {
   const g = gen;
   enqueue(async () => {
     if (g !== gen || !card.isConnected || card._ver === ver || !visible) return;
+    Looks.picture = !!(await SP.cover.image());   // the randomizer needs to know before it rolls
     const v = ver, st = stateFor(card);
     card._look = card._recipe.kind === "flag" ? card._recipe.look : SR.lookOf(st);   // a flagged card stays that flag
     await App.thumb(work, st);

@@ -11,6 +11,7 @@ const SLEEVE_DEFAULTS = {
   // backdrop layers
   wash: "none", washAmt: 45, shape: "none", shapeAmt: 85, shapeSize: 55, shapeX: 70, shapeY: 38, shapeColor: "accent", shapeOutline: false, shapeRot: 0,
   // pattern layer (shared/patterns.js): where it sits, how loud, which colours
+  plates: "none",   // ground-coloured cut-out panels behind the words: none | title | all
   pattern: "none", patternAmt: 35, patternScale: 100, patternAngle: 0, patternArea: "full", patternPos: 50, patternColor: "ink", patternSeed: 1,
   texture: "none", textureAmt: 45,
   // layout
@@ -550,6 +551,12 @@ async function render(canvas, state, image, logo) {
   const alignOf = (el) => st[el + "Align"] || st.align;
   const ax = (w, el) => { const al = alignOf(el), dx = S * (st[el + "X"] || 0) / 100; return (al === "centre" ? (S - w) / 2 : al === "right" ? S - X - w : X) + dx; };
   ctx.textBaseline = "alphabetic";
+  // Cut-out plates: a patch of ground behind words, so a loud pattern or shape can run underneath.
+  const plateOn = (el) => st.plates === "all" || (st.plates === "title" && el === "title");
+  const plate = (el, x, y, w, h, px, py = px) => {
+    if (!plateOn(el) || !(w > 0)) return;
+    const f = ctx.fillStyle; ctx.fillStyle = rgba(bg, 1); ctx.fillRect(x - px, y - py, w + px * 2, h + py * 2); ctx.fillStyle = f;
+  };
 
   // Artist (+ year)
   const artistY = S * st.artistY / 100;
@@ -571,11 +578,13 @@ async function render(canvas, state, image, logo) {
     // Runs up the left edge or down the right edge; artistY is where its middle sits.
     const left = st.artistRotate === "left", ex = left ? X * 0.62 + artistSize * 0.72 : S - X * 0.62 - artistSize * 0.72;
     const ey = Math.min(S - aw / 2 - X * 0.5, Math.max(aw / 2 + X * 0.5, artistY)) + S * (st.artistX || 0) / 100;
+    plate("artist", left ? ex - artistSize * 0.8 : ex - artistSize * 0.2, ey - aw / 2, artistSize, aw, artistSize * 0.45);
     ctx.save(); ctx.translate(ex, ey); ctx.rotate(left ? -Math.PI / 2 : Math.PI / 2);
     drawTracked(ctx, artistText, -aw / 2, 0, aTrack, artistSize); ctx.restore();
     boxes.artist = { x: left ? ex - artistSize * 0.8 : ex - artistSize * 0.2, y: ey - aw / 2, w: artistSize, h: aw };
   } else if (artistText) {
     const x = ax(aw, "artist");
+    plate("artist", x, artistY - artistSize * 0.8, aw, artistSize * 0.95, artistSize * 0.55, artistSize * 0.4);
     drawTracked(ctx, artistText, x, artistY, aTrack, artistSize);
     boxes.artist = { x, y: artistY - artistSize * 0.8, w: aw, h: artistSize };
   }
@@ -583,13 +592,16 @@ async function render(canvas, state, image, logo) {
     const ys = S * 0.016, yt = st.year.toUpperCase();
     ctx.font = `${weightFor(bodyFace, "600")} ${ys}px ${bface}`; ctx.fillStyle = rgba(ink, 0.6);
     const w = measureTracked(ctx, yt, 0.26, ys), al = rotated ? "centre" : alignOf("artist");
-    drawTracked(ctx, yt, al === "right" ? X : S - X - w, rotated ? S * 0.07 : artistY, 0.26, ys);
+    const yx = al === "right" ? X : S - X - w, yy = rotated ? S * 0.07 : artistY;
+    plate("year", yx, yy - ys * 0.8, w, ys * 0.95, ys * 0.55, ys * 0.4);
+    drawTracked(ctx, yt, yx, yy, 0.26, ys);
   }
 
   // Motif
   const motifTop = S * st.motifY / 100, motifH = S * 0.05 * st.motifSize / 100;
   if (st.motifKind !== "none" && st.count > 0) {
     const mw = motifWidth(S, st), mx = ax(mw, "motif");
+    plate("motif", mx, motifTop, mw, motifH, S * 0.012);
     drawMotif(ctx, S, st, mx, motifTop, ink, spot, `${st.catalog}|${st.title}`);
     boxes.motif = { x: mx, y: motifTop, w: mw, h: motifH };
   }
@@ -620,6 +632,11 @@ async function render(canvas, state, image, logo) {
       return { l, x, y, w, col: st.titleAccent && i === lines.length - 1 ? spot : main };
     });
     const lw = Math.max(1, size * 0.028);
+    if (style !== "block") {
+      const desc = st.titleCase !== "upper" && /[gjpqy,]/.test(lines[lines.length - 1]) ? size * 0.24 : size * 0.06;
+      const th0 = size * lead * (lines.length - 1) + size * 0.74 + (style === "echo" ? size * 0.5 : 0);
+      plate("title", bx0, bottom - th0, bx1 - bx0, th0 + desc, size * 0.14, size * 0.12);
+    }
     if (style === "block") {
       // Each line on a bar of spot colour; the text takes whichever of ground/ink reads best on it.
       const onSpot = SP.contrast(bg, spot) >= SP.contrast(ink, spot) ? bg : ink;
@@ -674,6 +691,7 @@ async function render(canvas, state, image, logo) {
     if (w > avail) { fs *= avail / w; ctx.font = `${weightFor(bodyFace, "600")} ${fs}px ${bface}`; }
     const fw = measureTracked(ctx, text, track, fs);
     const fx = corner && alignOf("footer") !== "left" ? X + S * (st.footerX || 0) / 100 : ax(fw, "footer");
+    plate("footer", fx, fy - fs * 0.8, fw, fs * 0.95, fs * 0.7, fs * 0.5);
     drawTracked(ctx, text, fx, fy, track, fs);
     boxes.footer = { x: fx, y: fy - fs * 0.9, w: fw, h: fs * 1.2 };
   }

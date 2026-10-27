@@ -49,7 +49,7 @@ function applyLook(look, opts = {}) {
 
 /* ---------- flagged looks ---------- */
 /* Keys added after looks were first flagged: left out of the id while unused, so older flags keep their ids. */
-const LATER_KEYS = new Set(["shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale", "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed"]);
+const LATER_KEYS = new Set(["plates", "shapeOutline", "shapeRot", "pattern", "patternAmt", "patternScale", "patternAngle", "patternArea", "patternPos", "patternColor", "patternSeed"]);
 function lookId(look) {
   const D = SR.SLEEVE_DEFAULTS, noPattern = !look.pattern || look.pattern === "none";
   const keys = SR.LOOK_KEYS.filter(k => !LATER_KEYS.has(k) || !(look[k] === undefined || look[k] === D[k] || (noPattern && k.startsWith("pattern"))));
@@ -205,7 +205,10 @@ function migrateLooks() {
   const ls = SP.get().looks; if (ls.every(l => l && l.id && l.look)) return;
   SP.set("looks", ls.filter(l => l && l.look).map(l => l.id ? l : { ...l, id: lookId(l.look), ts: l.ts || Date.now() }));
 }
+/* The randomizer treats a full-bleed photo gently; it needs to know whether there is one. */
+function trackPicture() { const upd = async () => { Looks.picture = !!(await SP.cover.image()); }; SP.cover.on(upd); upd(); }
 function start() {
+  trackPicture();
   migrateLooks(); SP.on(() => { if (SP.get().looks.some(l => !l || !l.id)) migrateLooks(); });
   mountBar(); window.addEventListener("hashchange", route); route();
 }
