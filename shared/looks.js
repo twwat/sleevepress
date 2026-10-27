@@ -214,6 +214,10 @@ function rects(s) {
   return out;
 }
 
+/* Shapes with inner detail or line work: they read as noise behind words. */
+const BUSY_SHAPES = new Set(["bars", "target", "scope", "rays", "chevrons", "squares", "spiral", "wave", "honeycomb", "halftone", "sunset", "web", "snowflake",
+  "glass", "rosewindow", "swords", "shuriken", "starburst", "sun", "discs", "eye"]);
+
 /* Rectangles the pattern covers, in sleeve percent. */
 function patternRect(s) {
   const p = s.patternPos ?? 50;
@@ -526,19 +530,25 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
     const bg = hexToRgb(s.bg), rad = s.shapeSize / 2;
     const shapeRect = () => R(s.shapeX - rad, s.shapeY - rad, rad * 2, s.shape === "half" ? rad : rad * 2);
     const checks = [[r.title, s.titleStyle === "block" ? [] : titleCols(), 2.6], [r.artist, [textRgb(s, "artistColor")], 3], [r.footer, [textRgb(s, "footerColor")], 2.4]];
-    const ok = () => checks.every(([q, cols, t]) => !q || !overlap(shapeRect(), q) ||
+    // detailed shapes (and any shape carrying a pattern) never sit behind the title; plain ones may if the colours hold
+    const busy = BUSY_SHAPES.has(s.shape) || (s.pattern !== "none" && s.patternArea === "shape") || s.shapeOutline || ["outline", "echo"].includes(s.titleStyle);
+    const ok = () => !(busy && overlap(shapeRect(), r.title, 1)) && checks.every(([q, cols, t]) => !q || !overlap(shapeRect(), q) ||
       cols.every(c => contrast(c, mixRgb(bg, hexToRgb(s.shapeColor === "ink" ? s.ink : s.accent), s.shapeAmt / 100)) >= t));
     // first try moving it somewhere the words aren't (off-centre and half off the edge is a classic look anyway)
     if (!ok()) {
-      const spots = [[78, 22], [22, 78], [80, 80], [20, 20], [85, 50], [15, 50], [50, 15], [50, 88]];
-      const start = Math.floor(rnd() * spots.length), x0 = s.shapeX, y0 = s.shapeY;
-      for (let i = 0; i < spots.length && !ok(); i++) { [s.shapeX, s.shapeY] = spots[(start + i) % spots.length]; }
-      if (!ok()) { s.shapeX = x0; s.shapeY = y0; }
+      const spots = [[78, 22], [22, 78], [88, 10], [10, 90], [92, 92], [8, 8], [97, 50], [3, 50], [50, 3], [50, 98]];
+      const start = Math.floor(rnd() * spots.length), x0 = s.shapeX, y0 = s.shapeY, z0 = s.shapeSize;
+      for (const z of [z0, Math.min(z0, 58), Math.min(z0, 44)]) {
+        s.shapeSize = z;
+        for (let i = 0; i < spots.length && !ok(); i++) { [s.shapeX, s.shapeY] = spots[(start + i) % spots.length]; }
+        if (ok()) break;
+      }
+      if (!ok()) { s.shapeX = x0; s.shapeY = y0; s.shapeSize = z0; }
     }
     if (!ok()) s.shapeColor = s.shapeColor === "ink" ? "accent" : "ink";
     while (!ok() && s.shapeAmt > 30) s.shapeAmt -= 5;
     // stripes behind the title only ever look busy
-    if (!ok() || (s.shape === "bars" && overlap(shapeRect(), r.title))) s.shape = "none";
+    if (!ok()) s.shape = "none";
   }
   // a pattern that lived inside a shape that's gone fills the ground instead (and is quietened below)
   if (s.shape === "none" && s.patternArea === "shape" && !hard.backdrop) s.patternArea = "full";
@@ -570,6 +580,8 @@ function repair(s, hard, rnd, pick, between, chance, locks) {
       if (r.footer && overlap(box, r.footer)) n.push([textRgb(s, "footerColor"), 2.4]);
       return n;
     };
+    // echo's ghost lines get lost in a photo
+    if (!hard.type && s.titleStyle === "echo" && r.title && overlap(box, r.title)) s.titleStyle = "shadow";
     let need = needs();
     // A spot-coloured line over the picture rarely holds up: go back to ink before dimming everything.
     if (!hard.type && need.length) {

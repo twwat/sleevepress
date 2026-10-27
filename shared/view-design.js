@@ -115,13 +115,13 @@ function drawTitleStyle(x, v, w, hh) {
   // render synchronously isn't possible; draw a cached copy when it arrives
   SR.render(c, fake, null).then(() => { x.clearRect(0, 0, w, hh); x.drawImage(c, 0, -w * 0.2, w, w); });
 }
-function drawWash(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, wash: v, washAmt: 90, shape: "none", texture: "none" }, cols().bg, ink, spot); }
+function drawWash(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, pattern: "none", shapeOutline: false, shapeRot: 0, wash: v, washAmt: 90, shape: "none", texture: "none" }, cols().bg, ink, spot); }
 function drawPatternMini(x, v, w, hh) {
   miniGround(x, w, hh); if (v === "none" || !window.Patterns) return; const { bg, ink, spot } = cols();
   try { Patterns.draw(x, w, hh, v, { S: w, scale: 60, angle: 0, fg: ink, fg2: spot, bg, alpha: 0.8, seed: st.patternSeed || 1 }); } catch (e) {}
 }
-function drawShape(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, wash: "none", shape: v, shapeAmt: 95, shapeSize: 60, shapeX: 50, shapeY: 50, texture: "none" }, cols().bg, ink, spot); }
-function drawTexture(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, wash: "none", shape: "none", texture: v, textureAmt: 100 }, cols().bg, ink, spot); x.scale(1, 1); }
+function drawShape(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, pattern: "none", wash: "none", shape: v, shapeAmt: 95, shapeSize: 60, shapeX: 50, shapeY: 50, texture: "none" }, cols().bg, ink, spot); }
+function drawTexture(x, v, w, hh) { miniGround(x, w, hh); const { ink, spot } = cols(); SR.drawBackdrop(x, w, hh, { ...st, pattern: "none", shapeOutline: false, shapeRot: 0, wash: "none", shape: "none", texture: v, textureAmt: 100 }, cols().bg, ink, spot); x.scale(1, 1); }
 function drawBarcodeMini(x, v, w, hh) {
   miniGround(x, w, hh); const { bg, ink, spot } = cols();
   x.save(); x.translate(0, 0); SR.drawBarcode(x, w * 3.2, w * 0.92, hh * 0.86, '"IBM Plex Mono", monospace', bg, ink, { ...st, barcodeStyle: v, barcodeSize: 100 }, spot); x.restore();
