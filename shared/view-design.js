@@ -36,7 +36,7 @@ const draw = SP.rafOnce(async () => {
   // memory is capped and isn't given back until garbage collection
   if (gen !== drawGen) { c.width = 0; return; }   // a newer render has started; this one is out of date
   canvas.getContext("2d").drawImage(c, 0, 0); c.width = 0;
-  boxes = b || {}; positionSel();
+  boxes = b || {}; positionSel(); syncFlag();
   const said = describeCover(); if (descEl.textContent !== said) descEl.textContent = said;
   if (wordsBox) wordsBox._fit(!!boxes.titleShrunk && st.titleSize > (boxes.titleMaxSize || 0) + 2);
   el.querySelector(".dz-file").textContent = SR.filename(st, st.exportSize || "3000");
@@ -605,6 +605,12 @@ function shuffle(seed) {
   s.lookSeed = seed; writing = true; App.commit(s, { force: true, paletteName: s.paletteName }); SP.patch("sleeve", { lookSeed: seed }); writing = false;
   st = App.state(); buildPanel(); draw(); updateSeed();
 }
+/* The ♥ button says whether the look on screen is already flagged, whichever way it got there (Discover, a shuffle, undo). */
+function syncFlag() {
+  const b = el && el.querySelector(".dz-flag"); if (!b) return;
+  const on = App.isFlagged(SR.lookOf(App.state()));
+  b.textContent = on ? "♥ Flagged" : "♥ Flag this look"; b.setAttribute("aria-pressed", String(on));
+}
 function updateSeed() { const n = SP.get().sleeve.lookSeed; el.querySelector(".dz-seed span").hidden = !n; el.querySelector(".dz-seed b").textContent = n || ""; }
 let varBase = 1;
 function showVariations() {
@@ -687,7 +693,7 @@ function mount(root) {
           h("button", { type: "button", class: "btn primary", title: "A new look for these words (keeps what you've locked)", onclick: () => shuffle() }, "Shuffle"),
           h("div", { class: "dz-seed" }, named(btn("‹", () => shuffle((SP.get().sleeve.lookSeed || 2) - 1)), "Previous shuffle"), h("span", {}, "#", h("b", {}, "—")), named(btn("›", () => shuffle()), "Next shuffle")),
           Object.assign(btn("Variations", () => { varBase++; showVariations(); }), { className: "btn small dz-varbtn" }),
-          btn("♥ Flag this look", (e) => { const on = App.toggleFlag(SR.lookOf(App.state())); e.currentTarget.textContent = on ? "♥ Flagged" : "♥ Flag this look"; }),
+          Object.assign(btn("♥ Flag this look", () => { App.toggleFlag(SR.lookOf(App.state())); syncFlag(); }), { className: "btn small dz-flag" }),
           lockChips),
         h("div", { class: "dz-vars", hidden: true }, h("div", { class: "dz-varhead" }, h("span", { class: "legend" }, "Variations on this look: click one to use it"), btn("More", () => { varBase++; showVariations(); }), btn("Close", () => { el.querySelector(".dz-vars").hidden = true; el.querySelector(".dz-varbtn").focus(); })), h("div", { class: "dz-vargrid" })),
         h("div", { class: "dz-sleeve" }, canvas, overlay, descEl, keysHelp, liveEl),

@@ -42,7 +42,9 @@
 .view-export .ex-grid-promo { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 980px) { .view-export .ex-grid-promo { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .view-export .ex-card { background: var(--bench); border: 1px solid var(--rule); display: flex; flex-direction: column; min-width: 0; }
-.view-export .ex-card.off { opacity: .6; }
+/* unticked: the picture fades, the words stay readable */
+.view-export .ex-card.off .ex-pv { opacity: .5; }
+.view-export .ex-card.off { border-color: var(--rule); }
 .view-export .ex-pv {
   aspect-ratio: 4 / 3; display: grid; place-items: center; padding: 12px; overflow: hidden;
   background: #0d0c0a; border-bottom: 1px solid var(--rule); position: relative;

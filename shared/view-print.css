@@ -33,12 +33,12 @@
 .view-print .pr-size { font: 11px var(--f-mono); color: var(--chalk-dim); }
 .view-print .pr-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 8px; margin-top: 6px; }
 .view-print .pr-fields input { padding: 6px 8px; min-height: 32px; }
-.view-print .pr-card:not(.on) .pr-fields { opacity: .6; }
+.view-print .pr-card:not(.on) .pr-fields input, .view-print .pr-card:not(.on) .pr-fields select { opacity: .6; }
 
 .view-print .pr-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
 .view-print .pr-checks .check { min-height: 32px; }
 .view-print .pr-roundopts { display: grid; gap: 10px; border-top: 1px solid var(--rule); padding-top: 12px; }
-.view-print .pr-roundopts.dim > label { opacity: .6; }
+.view-print .pr-roundopts.dim > label { color: var(--chalk-faint); }
 .view-print .pr-grid { display: grid; gap: 10px; }
 .view-print .pr-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .view-print .pr-nums input { padding: 6px 8px; min-height: 32px; }
