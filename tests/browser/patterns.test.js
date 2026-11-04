@@ -88,3 +88,32 @@ test("the randomizer deals banded patterns into real sleeves", { skip }, async (
   assert.deepEqual(a.errors, []);
   await a.close();
 });
+
+const STAMPED = ["melt", "ghosts", "eyes", "daisy", "grille", "mesh", "carbon", "tread", "amoeba", "virus", "cells", "molecules", "skulls", "sugarskull", "bones", "xray"];
+
+test("stamped and shaded patterns: repeatable, drawn, and the same built in steps", { skip }, async () => {
+  const a = await open();
+  const r = await a.page.evaluate((ids) => {
+    const fg = [240, 230, 210], fg2 = [210, 70, 50], bg = [30, 26, 34], out = [];
+    const draw = (id, S, o) => { const c = document.createElement("canvas"); c.width = c.height = S; Patterns.draw(c.getContext("2d"), S, S, id, { fg, fg2, bg, S, scale: 100, ...o }); return c.getContext("2d").getImageData(0, 0, S, S).data; };
+    const diff = (p, q) => { let n = 0; for (let i = 0; i < p.length; i++) if (p[i] !== q[i]) n++; return n; };
+    for (const id of ids) {
+      Patterns.clearCache(); const one = draw(id, 300, { seed: 9 });
+      Patterns.clearCache(); const again = draw(id, 300, { seed: 9 });
+      let inked = 0; for (let i = 3; i < one.length; i += 4) if (one[i]) inked++;
+      const o = { fg, fg2, bg, S: 900, scale: 90, seed: 4, angle: 30 };
+      Patterns.clearCache(); const big = draw(id, 900, { seed: 4, scale: 90, angle: 30 });
+      Patterns.clearCache(); for (const _ of Patterns.steps(900, 900, id, o));
+      const stepped = draw(id, 900, { seed: 4, scale: 90, angle: 30 });
+      out.push({ id, repeat: diff(one, again), inked, stepped: diff(big, stepped) });
+    }
+    return out;
+  }, STAMPED);
+  for (const x of r) {
+    assert.equal(x.repeat, 0, `${x.id}: same seed, same pixels`);
+    assert.ok(x.inked > 300 * 300 * 0.05, `${x.id}: draws something (${x.inked} px)`);
+    assert.equal(x.stepped, 0, `${x.id}: stepped and one-go builds match`);
+  }
+  assert.deepEqual(a.errors, []);
+  await a.close();
+});
