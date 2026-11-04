@@ -222,6 +222,8 @@ function toned(image, state) {
     }
     g.putImageData(id, 0, 0);
   }
+  // the one it replaces is no longer drawn by anyone (callers draw the result straight away): free it now
+  if (tonedCache.canvas) { tonedCache.canvas.width = 0; tonedCache.canvas.height = 0; }
   tonedCache = { key, canvas: c };
   return c;
 }
@@ -326,6 +328,7 @@ function halftone(c, g, w, h, st, q) {
     g.moveTo(x + r, y); g.arc(x, y, r, 0, Math.PI * 2);
   }
   g.fill();
+  sm.width = sm.height = 0;
 }
 /* Fills (x,y,w,h) with the image: zoom 100 covers the box, below 100 it floats smaller on the ground.
    shiftX/shiftY move it by a share of the box, so dragging feels the same at every zoom. */
@@ -698,14 +701,14 @@ function drawMotif(ctx, S, st, xStart, top, ink, spot, seedText) {
 function motifWidth(S, st) { const k = st.motifSize / 100; return (st.count - 1) * S * 0.0232 * st.motifPitch / 100 + S * 0.0105 * k * (st.motifKind === "slants" ? 1.6 : 1.2); }
 
 /* ---------- record label mark ---------- */
-const logoCache = new Map();
+const logoCache = new Map(), LOGO_TINTS = LOW_MEMORY ? 2 : 6;   // each up to 800 px; Discover asks for a new colour per card
 /* Recolours a logo: tint keeps its alpha and fills it with one colour; knockout turns a dark-on-white logo into colour on clear. */
 function tintedLogo(logo, mode, rgb) {
   if (!logo) return null;
   if (mode === "original") return logo;
   if (!imageIds.has(logo)) imageIds.set(logo, ++imageSeq);
   const key = [imageIds.get(logo), mode, rgb.join(",")].join("|");
-  if (logoCache.has(key)) return logoCache.get(key);
+  if (logoCache.has(key)) { const c = logoCache.get(key); logoCache.delete(key); logoCache.set(key, c); return c; }
   const iw = logo.naturalWidth || logo.width, ih = logo.naturalHeight || logo.height, s = Math.min(1, 800 / Math.max(iw, ih));
   const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(iw * s)); c.height = Math.max(1, Math.round(ih * s));
   const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(logo, 0, 0, c.width, c.height);
@@ -715,7 +718,7 @@ function tintedLogo(logo, mode, rgb) {
     d[i] = rgb[0]; d[i + 1] = rgb[1]; d[i + 2] = rgb[2]; d[i + 3] = Math.min(255, mode === "knockout" ? a * 1.25 : a);
   }
   g.putImageData(id, 0, 0);
-  if (logoCache.size > 12) logoCache.clear();
+  while (logoCache.size >= LOGO_TINTS) { const [k0, c0] = logoCache.entries().next().value; logoCache.delete(k0); c0.width = c0.height = 0; }
   logoCache.set(key, c); return c;
 }
 /* Draws the mark centred on (cx, cy); returns its box. */

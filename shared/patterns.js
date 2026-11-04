@@ -64,7 +64,7 @@ function LRU(budget) {
 }
 // Layers are only cached for rotated or multi-pass patterns (see draw); tiles for every tiled pattern.
 const layerCache = LRU(LOW_MEMORY ? 4e6 : 16e6);   // desktop: ~11 layers at 1200², 1 at 3000²
-const tileCache = LRU(LOW_MEMORY ? 3e6 : 8e6);
+const tileCache = LRU(LOW_MEMORY ? 2e6 : 8e6);    // low: preview-sized tiles (<1 Mpx) stay, export-sized ones go
 
 /* ---------- helpers ---------- */
 function tile(P, name, tw, th, fn) {
