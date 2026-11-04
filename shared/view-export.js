@@ -4,8 +4,11 @@
 "use strict";
 const SR = SleeveRender, TR = TracklistRender, h = App.h;
 
-const cat = () => SP.safeName(SP.get().release.catalog || "release");
-const st = () => App.state();
+/* File names keep to plain letters, so "Björk" becomes "Bjork" rather than "Bj_rk". */
+const LETTERS = { "ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "þ": "th", "Þ": "TH" };
+const plain = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[ßæÆœŒøØłŁđĐþÞ]/g, (c) => LETTERS[c]);
+const cat = () => SP.safeName(plain(SP.get().release.catalog)) || "release";
+const st = () => { const s = { ...App.state() }; for (const k of ["catalog", "artist", "title"]) s[k] = plain(s[k]); return s; };
 const enc = (t) => new TextEncoder().encode(t);
 const textBlob = (t, mime = "text/plain") => new Blob([t], { type: mime + ";charset=utf-8" });
 

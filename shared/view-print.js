@@ -254,7 +254,8 @@ function drawPage(canvas, pg, cv, k) {
   }
   x.setLineDash([]);
 }
-const fileName = (db, o) => `${SP.safeName(db.release.catalog || db.release.artist || "release") || "release"}_print_${o.paper}.pdf`;
+const plain = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");   // "Björk" → "Bjork" in file names
+const fileName = (db, o) => `${SP.safeName(plain(db.release.catalog || db.release.artist)) || "release"}_print_${o.paper}.pdf`;
 
 /* Document properties: what a print shop sees in File → Properties, and the title a viewer shows. */
 function pdfInfo(db, o) {

@@ -127,6 +127,17 @@ test("release kit zip: one top folder, a folder per group, README first, manifes
   await a.close();
 });
 
+test("file names keep accented letters as plain ones", { skip }, async () => {
+  const a = await open();
+  await a.page.evaluate(() => SP.patch("release", { artist: "Björk", title: "Homogénic", catalog: "TPLP71", footer: "" }));
+  const names = await a.page.evaluate(async () => (await ExportKit.zip(["cover1400", "info"])).made.map(m => m.name));
+  assert.deepEqual(names, ["Streaming/TPLP71_Bjork_-_Homogenic_1400.png", "Text/TPLP71_release_info.txt"]);
+  await a.page.evaluate(() => SP.patch("release", { catalog: "" }));
+  assert.equal(await a.page.evaluate(async () => (await PrintSheet.buildPdf({ pieces: { sticker: { on: true, n: 1 } }, sticker: 120 })).name), "Bjork_print_A4.pdf");
+  assert.deepEqual(a.errors, []);
+  await a.close();
+});
+
 test("print PDF: document properties name the release, and the xref still lines up", { skip }, async () => {
   const a = await open();
   await release(a);
