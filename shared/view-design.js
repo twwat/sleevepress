@@ -284,7 +284,7 @@ function panelFor(t) {
     }
     P.push(group("Cut-out plates", seg("plates", null, [["none", "None"], ["title", "Behind title"], ["all", "Behind all words"]]),
       hint("Patches of ground colour behind the words, so a loud pattern or shape can run underneath.")));
-    P.push(group("Texture", pick("texture", null, [["none", "None"], ["halftone", "Halftone"], ["lines", "Lines"], ["grid", "Grid"]], drawTexture, { rebuild: true }),
+    P.push(group("Texture", pick("texture", null, [["none", "None"], ["halftone", "Halftone"], ["lines", "Lines"], ["grid", "Grid"], ["linen", "Linen"], ["canvas", "Canvas"], ["denim", "Denim"], ["distress", "Worn print"]], drawTexture, { rebuild: true }),
       range("textureAmt", "Strength", 0, 100, 1, { unit: "%", show: () => st.texture !== "none", reset: 45 }),
       row(range("grain", "Grain", 0, 100, 1, { half: true, reset: 28 }), range("vignette", "Vignette", 0, 100, 1, { half: true, reset: 55 }))));
   }

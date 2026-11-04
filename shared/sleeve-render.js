@@ -563,6 +563,184 @@ function drawShape(ctx, st, cx, cy, r, col, a, col2, bg, S) {
   ctx.restore();
 }
 
+/* ---------- material textures: the sleeve printed on cloth, or a worn print ----------
+   linen, canvas and denim are woven cloth; distress is a halftone screen worn away in patches. Each is worked out a
+   pixel at a time from seeded hashes (no tiles, so no repeats and no seams) as a grey "photo" of the material, and
+   laid as light and dark only: white where the cloth is lighter than its average, black where darker, so it reads on
+   any ground and over any colour without tinting it. Thread sizes follow the sleeve size, so a 3000 px export is the
+   preview, sharper; when threads get too small for the pixels (thumbnails) the weave fades to its streaks. */
+const MATERIALS = ["linen", "canvas", "denim", "distress"];
+const isMaterial = (t) => MATERIALS.includes(t);
+function hash2(i, j, s) {
+  let h = (Math.imul(i | 0, 374761393) + Math.imul(j | 0, 668265263) + Math.imul(s | 0, 1440662683)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+const smooth = (t) => t * t * (3 - 2 * t);
+const clamp01 = (t) => t < 0 ? 0 : t > 1 ? 1 : t;
+function vnoise(x, y, s) {
+  const i = Math.floor(x), j = Math.floor(y), fx = smooth(x - i), fy = smooth(y - j);
+  const a = hash2(i, j, s), b = hash2(i + 1, j, s), c = hash2(i, j + 1, s), d = hash2(i + 1, j + 1, s);
+  return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+}
+function fbm(x, y, s, oct) {
+  let t = 0, a = 1, n = 0;
+  for (let o = 0; o < oct; o++) { t += a * vnoise(x, y, s + o * 101); n += a; x = x * 2.03 + 17.1; y = y * 2.03 + 5.3; a *= 0.5; }
+  return t / n;
+}
+/* A slow field fn(x, y) over an S-sized square, worked out on an n × n grid and looked up between its points. */
+function gridField(fn, n, S) {
+  const q = n / S, f = new Float32Array((n + 2) * (n + 2));
+  for (let b = 0; b <= n + 1; b++) for (let a = 0; a <= n + 1; a++) f[b * (n + 2) + a] = fn(a / q, b / q);
+  return (x, y) => {
+    const gx = Math.max(0, x * q), gy = Math.max(0, y * q), a = Math.min(n, gx | 0), b = Math.min(n, gy | 0), fx = gx - a, fy = gy - b, o = b * (n + 2) + a;
+    return (f[o] * (1 - fx) + f[o + 1] * fx) * (1 - fy) + (f[o + n + 2] * (1 - fx) + f[o + n + 3] * fx) * fy;
+  };
+}
+/* A plain weave as grey 0..1 at pixel (x, y): over-under threads `pw` apart that wander a little, each its own shade,
+   with fibre streaks along it. `o`: how uneven the yarn is (tone), how much it stands up (relief, lit from the top
+   left), how thick the slubs get, the gap between threads. */
+function plainWeave(x, y, pw, fine, s, o, wu, wv) {
+  const u = x / pw + wu(x, y) * o.wander, v = y / pw + wv(x, y) * o.wander;
+  const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j, warp = ((i + j) & 1) === 0;
+  const n = warp ? i : j, a = warp ? fu : fv, l = warp ? fv : fu, along = warp ? v : u, across = warp ? u : v;
+  const slub = clamp01((vnoise(along * 0.2 + 0.5, n * 1.7, s + 3 + warp) - 0.62) * 3.5) * o.slub;
+  const X = (2 * a - 1) / (1 - o.gap + 0.25 * slub), body = X * X < 1 ? 1 - X * X : 0;
+  const lift = Math.pow(Math.sin(Math.PI * l), 0.6), h = body * lift;
+  const rel = (-X * lift + Math.cos(Math.PI * l) * 0.6) * body;   // lit from the top left
+  const tone = (hash2(n, warp ? 7 : 9, s) - 0.5) * 0.5 + (vnoise(along * 0.06, n * 1.3, s + 1 + warp) - 0.5) * 0.9 + slub * 0.7;
+  const fib = vnoise(across * 5, along * 0.55, s + 30 + warp) - 0.5;
+  return 0.5 + (o.relief * (h - 0.45) + o.light * rel + o.fibre * fib) * fine + o.tone * tone;
+}
+const WEAVES = {
+  // linen: fine plain weave of uneven yarn: threads of different shades and thick slubs, so it streaks both ways
+  linen: { n: 230, gain: 1.3, o: { wander: 0.5, slub: 1, gap: 0.05, relief: 0.3, light: 0.06, fibre: 0.2, tone: 0.16 },
+    b(x, y, pw, fine, s, w) { return plainWeave(x, y, pw, fine, s, this.o, w.wu, w.wv); } },
+  // canvas: a heavier, even plain weave that stands up in relief, with dark pin-holes where the threads cross
+  canvas: { n: 115, gain: 1.15, o: { wander: 0.3, slub: 0.4, gap: 0.0, relief: 0.22, light: 0.42, fibre: 0.2, tone: 0.07 },
+    b(x, y, pw, fine, s, w) { return plainWeave(x, y, pw, fine, s, this.o, w.wu, w.wv); } },
+  // denim: a 3/1 twill, so the face is nearly all warp: ribs running up to the right, each a row of short slanting
+  // floats that catch the light (lighter in the middle, each its own shade, the ring-spun yarn flecked), with dark
+  // furrows between; the dye has faded in long vertical streaks
+  denim: { n: 170, gain: 1.15, b(x, y, pw, fine, s) {
+    const ca = 0.454, sa = 0.891;   // the rib's direction: 63° up from the horizontal
+    const c = (x * sa + y * ca) / pw, al = (x * ca - y * sa) / pw;
+    const ci = Math.floor(c), fc = c - ci;
+    const a2 = al / (1.4 + hash2(ci, 4, s)) + hash2(ci, 1, s) * 9, sk = Math.floor(a2), fa = a2 - sk;
+    const rib = Math.pow(Math.sin(Math.PI * fc), 0.8) * Math.pow(Math.sin(Math.PI * fa), 0.45);
+    const tk = hash2(ci, sk, s + 2);
+    const fib = vnoise(c * 5, al * 1.2, s + 30) - 0.5;
+    const streak = (vnoise(x / pw * 0.45, y / pw * 0.03, s + 1) - 0.5) * 0.22;
+    return 0.3 + rib * (0.22 + 0.38 * tk) * (0.35 + 0.65 * fine) + (0.34 * fib * rib) * fine + streak;
+  } },
+};
+/* The weave's average grey, so laying it leaves the ground's overall tone where it was. */
+function weaveMean(m, s) {
+  if (m.meanFor === s) return m.mean;
+  let t = 0; const n = 64, flat = { wu: () => 0, wv: () => 0 };
+  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) t += m.b(a * 7.31 + 0.5, b * 7.73 + 0.5, 9.7, 1, s, flat);
+  m.mean = t / (n * n); m.meanFor = s; return m.mean;
+}
+/* The worn halftone: a 45° dot screen whose dots follow a slow tone field, worn through in streaky patches (the wear
+   bites into dots at its edges, so they go ragged before they go) and along a few scratches. Ink cover 0..1 at (x, y). */
+function distressField(S, s) {
+  const cp = S / 110, c = Math.SQRT1_2, rnd = SP.mulberry32(s * 2654435761 >>> 0);
+  const th = (25 + rnd() * 60) * Math.PI / 180, ct = Math.cos(th), sn = Math.sin(th);
+  const lines = [];
+  for (let n = 0; n < 14; n++) {
+    const a = th + (rnd() - 0.5) * 0.6, L = S * (0.15 + rnd() * 0.6), mx = rnd() * S, my = rnd() * S;
+    lines.push([mx - Math.cos(a) * L / 2, my - Math.sin(a) * L / 2, Math.cos(a), Math.sin(a), L, Math.max(0.7, S * (0.0008 + rnd() * 0.0022))]);
+  }
+  // the slow fields: dot size, and wear (streaky along the angle th, broken up finer)
+  const tone = gridField((x, y) => 0.06 + 0.8 * smooth(clamp01((fbm(x / S * 1.6, y / S * 1.6, s + 7, 3) - 0.3) / 0.42)), 160, S);
+  const wear = gridField((x, y) => fbm((x * ct + y * sn) / S * 1.5, (-x * sn + y * ct) / S * 6, s + 11, 4) + (fbm(x / S * 11, y / S * 11, s + 13, 3) - 0.5) * 0.7, 160, S);
+  // worn through on 30–50% of the sleeve whatever the seed
+  const sample = []; for (let b = 0; b < 64; b++) for (let a = 0; a < 64; a++) sample.push(wear((a + 0.5) * S / 64, (b + 0.5) * S / 64));
+  const cut = sample.sort((p, q) => p - q)[Math.floor(sample.length * (0.3 + 0.2 * rnd()))];
+  const radius = new Map();   // per dot: its radius in pixels
+  const dot = (ci, cj) => {
+    const key = ci * 8192 + cj; let r = radius.get(key);
+    if (r === undefined) {
+      const cu = (ci + 0.5) * cp, cv = (cj + 0.5) * cp, X = (cu - cv) * c, Y = (cu + cv) * c;   // the dot's centre
+      r = cp * 0.5 * Math.sqrt(tone(X, Y)) * (0.85 + 0.3 * hash2(ci, cj, s + 17));
+      radius.set(key, r);
+    }
+    return r;
+  };
+  const rough = cp * 0.055, bite = 0.07;
+  return (x, y) => {
+    // worn: below 0 gone; just above it the dots are eaten away to ragged crumbs
+    const w = wear(x, y) + (vnoise(x / cp * 0.9, y / cp * 0.9, s + 19) - 0.5) * 0.08 - cut;
+    if (w <= 0) return 0;
+    const gu = (x + y) * c / cp, gv = (y - x) * c / cp, ci = Math.floor(gu), cj = Math.floor(gv);
+    const eat = w < bite ? 1 - w / bite : 0;
+    const r = dot(ci, cj) * (1 - 0.8 * eat) - (vnoise(x / cp * 3, y / cp * 3, s + 23) - 0.5) * rough * (2 + 3 * eat);
+    const du = gu - ci - 0.5, dv = gv - cj - 0.5, d = Math.sqrt(du * du + dv * dv) * cp;
+    let cov = clamp01(r - d + 0.5);
+    if (cov > 0) for (const [x0, y0, dx, dy, L, lw] of lines) {
+      const t = (x - x0) * dx + (y - y0) * dy;
+      if (t < 0 || t > L) continue;
+      const e = Math.abs((x - x0) * dy - (y - y0) * dx), half = lw * Math.min(1, 3 * Math.min(t, L - t) / L + 0.15);
+      if (e < half + 1) cov *= clamp01(e - half);
+    }
+    return cov;
+  };
+}
+/* The texture's grey at pixel (x, y), signed: > 0 lightens, < 0 darkens (-1..1). Cloth is cloth, so the weaves use
+   one seed; the worn halftone wears differently on every sleeve (its pattern seed). */
+function materialPixels(kind, S, s, light) {
+  if (kind === "distress") { const f = distressField(S, s); return light ? (x, y) => f(x, y) * 0.45 : (x, y) => -f(x, y) * 0.42; }
+  const m = WEAVES[kind], pw = S / m.n, fine = clamp01((pw - 2.2) / 3), mean = weaveMean(m, s);
+  const mott = (kind === "denim" ? 0.07 : 0.06) * 2;
+  const mottle = gridField((x, y) => (fbm(x / S * 5, y / S * 5, s + 21, 3) - 0.5) * mott, 96, S);   // a slow unevenness: dye, sizing, wear
+  // the threads' slow wander, across and along
+  const w = { wu: gridField((x, y) => vnoise(x / pw * 0.07, y / pw * 0.02, s + 40) - 0.5, 160, S), wv: gridField((x, y) => vnoise(x / pw * 0.02, y / pw * 0.07, s + 41) - 0.5, 160, S) };
+  return (x, y) => (m.b(x, y, pw, fine, s, w) - mean + mottle(x, y)) * m.gain;
+}
+/* Rows y0 .. y0+h of the texture into `img` (W wide): white or black, its strength in the alpha. */
+function fillMaterial(img, px, W, y0, h) {
+  const d = img.data;
+  for (let y = 0; y < h; y++) for (let x = 0; x < W; x++) {
+    const v = px(x + 0.5, y0 + y + 0.5), o = (y * W + x) * 4, c = v > 0 ? 255 : 0;
+    d[o] = d[o + 1] = d[o + 2] = c; d[o + 3] = Math.min(255, Math.abs(v) * 255 + 0.5);
+  }
+}
+/* Preview-sized textures are kept, most recent last, so redrawing the editor's preview or a page of Discover cards
+   costs a drawImage; export-sized ones are worked out a strip at a time and not kept. */
+const MATERIAL_KEEP = LOW_MEMORY ? 1.5e6 : 3e6, MATERIAL_MAX = 1.5e6, materialCache = [];
+function materialLayer(kind, W, H, s, light) {
+  const key = `${kind} ${W} ${H} ${s} ${light}`, i = materialCache.findIndex(e => e.key === key);
+  if (i >= 0) { const e = materialCache.splice(i, 1)[0]; materialCache.push(e); return e.c; }
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d"), img = g.createImageData(W, H);
+  fillMaterial(img, materialPixels(kind, Math.min(W, H), s, light), W, 0, H); g.putImageData(img, 0, 0);
+  materialCache.push({ key, c });
+  let px = materialCache.reduce((t, e) => t + e.c.width * e.c.height, 0);
+  while (materialCache.length > 1 && px > MATERIAL_KEEP) { const e = materialCache.shift(); px -= e.c.width * e.c.height; e.c.width = e.c.height = 0; }
+  return c;
+}
+/* Draws a material texture over (0,0)–(W,H). A generator, so a big render can pause between strips; drawMaterial
+   runs it to the end. `bg` picks which way the halftone goes (dark dots on a light ground, light on a dark one). */
+function* materialSteps(ctx, W, H, st, bg, k = 1) {
+  const kind = st.texture, a = clamp01((st.textureAmt / 100) * k);
+  if (!isMaterial(kind) || a <= 0) return;
+  W = Math.ceil(W); H = Math.ceil(H);
+  const S = Math.min(W, H), s = kind === "distress" ? (st.patternSeed || 1) | 0 : 1, light = kind === "distress" && lum(bg) < 0.4;
+  ctx.save(); ctx.globalAlpha = a;
+  if (W * H <= MATERIAL_MAX) { try { ctx.drawImage(materialLayer(kind, W, H, s, light), 0, 0); } finally { ctx.restore(); } return; }
+  const px = materialPixels(kind, S, s, light), rows = Math.max(1, Math.min(H, Math.floor(262144 / W))), strip = borrow(W, rows), g = strip.getContext("2d");
+  try {
+    const img = g.createImageData(W, rows);
+    for (let y0 = 0; y0 < H; y0 += rows) {
+      const h = Math.min(rows, H - y0);
+      fillMaterial(img, px, W, y0, h); g.putImageData(img, 0, 0);
+      ctx.drawImage(strip, 0, 0, W, h, 0, y0, W, h);
+      yield;
+    }
+  } finally { ctx.restore(); giveBack(strip); }
+}
+function drawMaterial(ctx, W, H, st, bg, k) { for (const _ of materialSteps(ctx, W, H, st, bg, k)); }
+
 /* ---------- backdrop: wash, big shape, texture. `k` scales strength (the back sleeve uses less). ---------- */
 function drawBackdrop(ctx, W, H, st, bg, ink, spot, k = 1) {
   const S = Math.min(W, H);
@@ -600,7 +778,8 @@ function drawBackdrop(ctx, W, H, st, bg, ink, spot, k = 1) {
       }
     } else shapeAt(col, a);
   }
-  if (st.texture && st.texture !== "none" && st.textureAmt > 0) {
+  if (isMaterial(st.texture)) drawMaterial(ctx, W, H, st, bg, k);
+  else if (st.texture && st.texture !== "none" && st.textureAmt > 0) {
     const a = (st.textureAmt / 100) * k; ctx.save();
     if (st.texture === "halftone") {
       const p = S * 0.014; ctx.fillStyle = rgba(ink, 0.22 * a);
@@ -979,7 +1158,8 @@ async function renderSleeve(canvas, state, image, logo, keepWords) {
   await step();
 
   if (step !== noPause) { await prepareBackdrop(S, S, st, bg, ink, spot, 1, step); await step(); }
-  drawBackdrop(ctx, S, S, st, bg, ink, spot);
+  const surface = isMaterial(st.texture);   // cloth is the surface the whole sleeve is printed on: it goes over the words too
+  drawBackdrop(ctx, S, S, surface ? { ...st, texture: "none" } : st, bg, ink, spot);
   await step();
   applyVignette(ctx, S, S, st, bg, ink);
   drawFrame(ctx, S, S, st, ink, spot);
@@ -1209,6 +1389,7 @@ async function renderSleeve(canvas, state, image, logo, keepWords) {
     ctx.drawImage(words, 0, 0);
   }
 
+  if (surface) for (const _ of materialSteps(ctx, S, S, st, bg)) await step();
   if (step === noPause) applyGrain(ctx, S, S, st.grain, S);
   else { applyGrain(ctx, S, S, st.grain, S, 0, S / 2); await step(); applyGrain(ctx, S, S, st.grain, S, S / 2, S); }
   return boxes;
@@ -1222,7 +1403,7 @@ function filename(state, size, tag) {
 window.SleeveRender = {
   SLEEVE_DEFAULTS, TITLE_STYLES, IMG_EFFECTS, TITLE_ROTATES, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
   loadFont, loadFonts, weightFor, faceStack, fontInfo, drawTracked, measureTracked, applyCase, drawBarcode, barcodeWidth, barcodeReversed, eanDigits,
-  applyGrain, applyVignette, drawBackdrop, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth, drawShape, drawPattern, patternClip, BUILTIN_MARKS,
+  MATERIALS, applyGrain, applyVignette, drawBackdrop, drawMaterial, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth, drawShape, drawPattern, patternClip, BUILTIN_MARKS,
   trimScratch, scratchPixels,
 };
 })();

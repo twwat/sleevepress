@@ -453,7 +453,9 @@ function randomize(state, seed, locks = {}, opts = {}) {
       if (bold) { s.patternArea = bold.area; s.patternPos = bold.pos; s.patternAmt = between(70, 100); s.patternScale = between(80, 170, 5); }
       else if (scheme === "bold") { s.patternArea = "edge"; s.patternAmt = between(60, 90); }   // no free side: a strong pattern border instead
     }
-    s.texture = chance(0.3) ? pick(["halftone", "lines", "grid"]) : "none"; s.textureAmt = between(25, 75);
+    // a surface: printed on cloth (linen, canvas, denim), a worn halftone, or the old screens
+    s.texture = chance(0.3) ? pick(["halftone", "lines", "grid", "linen", "linen", "canvas", "denim", "distress"]) : "none";
+    s.textureAmt = between(25, 75);
     s.grain = between(8, 55); s.vignette = between(15, 75);
   }
   repair(s, hard, rnd, pick, between, chance, locks);
