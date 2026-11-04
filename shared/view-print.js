@@ -214,8 +214,8 @@ function cropLines(op) {
   }
   return L;
 }
-function toPdf(L, cv) {
-  const d = PDF.doc();
+function toPdf(L, cv, info) {
+  const d = PDF.doc(info);
   for (const pg of L.pages) {
     const p = d.page(pg.w, pg.h);
     for (const op of pg.ops) {
@@ -256,12 +256,22 @@ function drawPage(canvas, pg, cv, k) {
 }
 const fileName = (db, o) => `${SP.safeName(db.release.catalog || db.release.artist || "release") || "release"}_print_${o.paper}.pdf`;
 
+/* Document properties: what a print shop sees in File → Properties, and the title a viewer shows. */
+function pdfInfo(db, o) {
+  const r = db.release, what = PIECES.filter(P => pieceOn(o, P.id)).map(P => P.name);
+  return {
+    title: [[r.artist, SP.titleLine(r)].filter(Boolean).join(" — "), "print sheet"].filter(Boolean).join(", "),
+    author: r.artist || r.label || "",
+    subject: `${what.join(", ")} · ${PAPER[o.paper].label} · print at 100% / actual size`,
+    keywords: [r.catalog, r.artist, SP.titleLine(r), r.label].filter(Boolean).join(", "),
+  };
+}
 async function smallEnv() { return Makers.env(SP.get(), await App.smallImage(), await SP.logo.image()); }
 async function buildPdf(o) {
   const db = SP.get(), L = layout(o, db);
   if (!L.pages.length) return null;
   const e = await App.env(), cv = await renderJobs(L, e, o, PPM_PDF);
-  return { blob: toPdf(L, cv), pages: L.pages.length, name: fileName(db, o) };
+  return { blob: toPdf(L, cv, pdfInfo(db, o)), pages: L.pages.length, name: fileName(db, o) };
 }
 
 /* ---------- view ---------- */

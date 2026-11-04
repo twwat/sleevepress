@@ -26,10 +26,23 @@ function winAnsi(s) {
   }
   return out;
 }
+/* A text string for the Info dictionary: UTF-16BE hex with a byte-order mark, so any script survives. */
+function infoText(s) {
+  let hex = "FEFF";
+  for (let i = 0; i < s.length; i++) hex += s.charCodeAt(i).toString(16).padStart(4, "0").toUpperCase();
+  return `<${hex}>`;
+}
+/* D:YYYYMMDDHHmmSS+HH'mm' in local time */
+function infoDate(d) {
+  const p = (n) => String(Math.abs(n)).padStart(2, "0"), off = -d.getTimezoneOffset();
+  return `(D:${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}` +
+    `${off === 0 ? "Z" : (off > 0 ? "+" : "-") + p(Math.trunc(off / 60)) + "'" + p(off % 60) + "'"})`;
+}
 function dataUrlBytes(u) { const b = atob(u.split(",")[1]); const a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
 const n2 = (v) => (Math.round(v * 1000) / 1000).toString();
 
-function doc() {
+/* info: { title, author, subject, keywords } for the document properties a viewer or print shop sees. */
+function doc(info = {}) {
   const pages = [], images = [], cache = new Map();
   const api = {
     page(wmm, hmm) {
@@ -76,11 +89,16 @@ function doc() {
       const push = (x) => { const b = typeof x === "string" ? enc.encode(x) : x; chunks.push(b); len += b.length; };
       const obj = (n, body) => { offs[n] = len; push(`${n} 0 obj\n`); body(); push("\nendobj\n"); };
       push("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
-      // numbering: 1 catalog, 2 pages, 3 font, then images, then page+content pairs
-      const imgBase = 4, pageBase = imgBase + images.length;
+      // numbering: 1 catalog, 2 pages, 3 font, 4 info, then images, then page+content pairs
+      const imgBase = 5, pageBase = imgBase + images.length;
       obj(1, () => push("<< /Type /Catalog /Pages 2 0 R >>"));
       obj(2, () => push(`<< /Type /Pages /Count ${pages.length} /Kids [${pages.map((_, i) => `${pageBase + i * 2} 0 R`).join(" ")}] >>`));
       obj(3, () => push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"));
+      obj(4, () => {
+        const f = [["Title", info.title], ["Author", info.author], ["Subject", info.subject], ["Keywords", info.keywords]]
+          .filter(([, v]) => v != null && String(v).trim()).map(([k, v]) => `/${k} ${infoText(String(v).trim())}`);
+        push(`<< ${f.join(" ")}${f.length ? " " : ""}/Creator ${infoText("Sleeve Press")} /Producer ${infoText("Sleeve Press")} /CreationDate ${infoDate(info.date || new Date())} >>`);
+      });
       images.forEach((im, i) => obj(imgBase + i, () => {
         push(`<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bytes.length} >>\nstream\n`);
         push(im.bytes); push("\nendstream");
@@ -94,7 +112,7 @@ function doc() {
       const count = pageBase + pages.length * 2, xref = len;
       push(`xref\n0 ${count}\n0000000000 65535 f \n`);
       for (let i = 1; i < count; i++) push(`${String(offs[i]).padStart(10, "0")} 00000 n \n`);
-      push(`trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+      push(`trailer\n<< /Size ${count} /Root 1 0 R /Info 4 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
       return new Blob(chunks, { type: "application/pdf" });
     },
   };
