@@ -69,6 +69,7 @@ test("edits to the user's work call the undo hook; flags and opt-outs don't", ()
 test("safeName and hashStr are stable", () => {
   const SP = fresh();
   assert.equal(SP.safeName("HPR-001 / Night Shift: Live!"), "HPR-001_Night_Shift_Live");
+  assert.equal(SP.safeName("Björk – Homogénic · Łódź Straße"), "Bjork_Homogenic_Lodz_Strasse");
   assert.equal(SP.hashStr("sleeve"), SP.hashStr("sleeve"));
   assert.notEqual(SP.hashStr("sleeve"), SP.hashStr("sleevf"));
 });

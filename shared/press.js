@@ -79,7 +79,12 @@ function rgbToLab([r, g, b]) {
 }
 const labDist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
-function safeName(s) { return String(s).replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""); }
+/* File names: accented letters become plain ones ("Björk" → "Bjork"), anything else that isn't a letter, digit or - becomes _. */
+const PLAIN = { "ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "þ": "th", "Þ": "TH" };
+function safeName(s) {
+  return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[ßæÆœŒøØłŁđĐþÞ]/g, (c) => PLAIN[c])
+    .replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+}
 function mulberry32(a) {
   return function () {
     a |= 0; a = a + 0x6D2B79F5 | 0;
