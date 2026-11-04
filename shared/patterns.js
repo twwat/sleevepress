@@ -1,10 +1,12 @@
 /* Sleeve Press: procedural pattern library.
    Patterns.LIST  -> [{ id, name, family, busy }]   busy 0..1 = how loud it is at scale 100 / alpha 0.5
    Patterns.draw(ctx, W, H, id, o)
-     o = { S, scale (percent), angle (deg), fg [r,g,b], fg2 [r,g,b], bg [r,g,b], alpha 0..1, seed }
+     o = { S, scale (percent), angle (deg), fg [r,g,b], fg2 [r,g,b], bg [r,g,b], alpha 0..1, seed,
+           unclipped (true when ctx has no clip: lets a plain tiled pattern skip its layer) }
    Every pattern works in the sleeve's 3-colour world: fg, fg2 and (for knockouts) bg, tinted only by alpha.
    Each pattern is drawn once at full strength into an offscreen layer (cached on every input but alpha),
-   then laid over the caller's canvas at `alpha`, so overlaps inside a pattern never double up. */
+   then laid over the caller's canvas at `alpha`, so overlaps inside a pattern never double up. An unrotated
+   pattern that is one tile fill skips the layer and lays its tile straight on (same pixels, see direct). */
 (function () {
 "use strict";
 
@@ -30,24 +32,39 @@ const rgba = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${Math.roun
 const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 function makeCanvas(w, h) { const c = document.createElement("canvas"); c.width = Math.max(1, Math.ceil(w)); c.height = Math.max(1, Math.ceil(h)); return c; }
 
-/* ---------- small LRU keyed by string, budgeted in pixels ---------- */
-const pool = [];   // evicted layer canvases, reused so big renders don't churn the GC
-function LRU(budget, recycle) {
+/* ---------- memory ----------
+   iOS Safari caps the total memory of all canvases on the page, and phones with little memory run out early, so
+   there the caches are kept small and big canvases are let go as soon as a render is done. */
+const LOW_MEMORY = (() => {
+  try {
+    const n = navigator, ios = /iP(hone|od|ad)/.test(n.userAgent) || (n.platform === "MacIntel" && n.maxTouchPoints > 1);
+    return ios || (n.deviceMemory > 0 && n.deviceMemory <= 4);
+  } catch (e) { return false; }
+})();
+/* Frees a canvas's pixels right away (Safari otherwise keeps them until the canvas is garbage collected). */
+function release(c) { if (c && c.width) { c.width = 0; c.height = 0; } }
+
+/* ---------- small LRU keyed by string, budgeted in pixels ----------
+   The newest entry stays even when it alone is over budget (it is in use); trim() then lets it go too. */
+function LRU(budget) {
   const m = new Map(); let used = 0;
-  const drop = (c) => { if (recycle) { pool.push(c); if (pool.length > 2) pool.shift(); } };
   const px = (c) => c.width * c.height;
+  const evict = (keep) => { while (used > budget && m.size > keep) { const [k0, v0] = m.entries().next().value; m.delete(k0); used -= px(v0); release(v0); } };
   return {
     get(k) { const v = m.get(k); if (v !== undefined) { m.delete(k); m.set(k, v); } return v; },
     set(k, v) {
-      if (m.has(k)) { used -= px(m.get(k)); m.delete(k); }
+      if (m.has(k)) { const old = m.get(k); used -= px(old); m.delete(k); if (old !== v) release(old); }
       m.set(k, v); used += px(v);
-      while (used > budget && m.size > 1) { const [k0, v0] = m.entries().next().value; m.delete(k0); used -= px(v0); drop(v0); }
+      evict(1);
     },
-    clear() { for (const v of m.values()) drop(v); m.clear(); used = 0; },
+    trim() { evict(0); },
+    clear() { for (const v of m.values()) release(v); m.clear(); used = 0; },
+    get used() { return used; },
   };
 }
-const layerCache = LRU(16e6, true);   // ~11 layers at 1200², 1-2 at 3000²
-const tileCache = LRU(8e6);
+// Layers are only cached for rotated or multi-pass patterns (see draw); tiles for every tiled pattern.
+const layerCache = LRU(LOW_MEMORY ? 4e6 : 16e6);   // desktop: ~11 layers at 1200², 1 at 3000²
+const tileCache = LRU(LOW_MEMORY ? 3e6 : 8e6);
 
 /* ---------- helpers ---------- */
 function tile(P, name, tw, th, fn) {
@@ -58,6 +75,7 @@ function tile(P, name, tw, th, fn) {
   return c;
 }
 function fillTile(P, c, ox = 0, oy = 0) {
+  if (P.fills) { P.fills.push([c, ox, oy]); return; }   // planning a direct fill (see draw)
   const g = P.g, pat = g.createPattern(c, "repeat");
   if ((ox || oy) && pat.setTransform) pat.setTransform(new DOMMatrix([1, 0, 0, 1, Math.round(ox), Math.round(oy)]));
   g.fillStyle = pat; g.fillRect(-P.R, -P.R, P.R * 2, P.R * 2);
@@ -148,6 +166,7 @@ function tartan(P) {
     wg.globalCompositeOperation = "destination-in"; wg.fillStyle = wg.createPattern(m, "repeat"); wg.fillRect(0, 0, N, N);
     hg.globalCompositeOperation = "destination-out"; hg.fillStyle = hg.createPattern(m, "repeat"); hg.fillRect(0, 0, N, N);
     g.globalAlpha = 0.75; g.drawImage(warp, 0, 0); g.drawImage(weft, 0, 0);
+    release(warp); release(weft); release(m);
   });
   fillTile(P, c, -N / 2, -N / 2);
 }
@@ -919,10 +938,13 @@ function pnoise(seed) {
    Each octave is evaluated at ~6 samples per lattice cell and upsampled, and the warp is a resample, so the
    cost hardly depends on n. */
 function upsample(src, rx, ry, n, out, amp) {   // periodic bilinear, accumulates amp * src into out (n×n)
+  // the column lookups are the same on every row: work them out once
+  const X0 = new Int32Array(n), X1 = new Int32Array(n), FX = new Float64Array(n);
+  for (let i = 0; i < n; i++) { const gx = i * rx / n, x0 = gx | 0; X0[i] = x0; X1[i] = (x0 + 1) % rx; FX[i] = gx - x0; }
   for (let j = 0; j < n; j++) {
     const gy = j * ry / n, y0 = gy | 0, fy = gy - y0, r0 = y0 * rx, r1 = ((y0 + 1) % ry) * rx, row = j * n;
     for (let i = 0; i < n; i++) {
-      const gx = i * rx / n, x0 = gx | 0, fx = gx - x0, x1 = (x0 + 1) % rx;
+      const x0 = X0[i], x1 = X1[i], fx = FX[i];
       const a = src[r0 + x0], b = src[r0 + x1], c = src[r1 + x0], d = src[r1 + x1];
       out[row + i] += amp * (a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy);
     }
@@ -967,9 +989,12 @@ PathStr.prototype.done = function () { return new Path2D(this.d.join("")); };
    that, so every loop closes outside the tile while everything inside it matches across the seam. */
 function contour(F, n, T, th) {
   const E = 2, lo = -E - 1, hi = n + E + 1, w = hi - lo + 1, cs = T / n;
-  const V = new Float32Array(w * w);
-  for (let j = lo; j <= hi; j++) for (let i = lo; i <= hi; i++)
-    V[(j - lo) * w + (i - lo)] = (i === lo || j === lo || i === hi || j === hi) ? -1e9 : F[(((j % n) + n) % n) * n + (((i % n) + n) % n)] - th;
+  const V = new Float32Array(w * w), wr = new Int32Array(w);
+  for (let i = lo; i <= hi; i++) wr[i - lo] = ((i % n) + n) % n;
+  for (let j = lo; j <= hi; j++) {
+    const row = (j - lo) * w, src = wr[j - lo] * n, edge = j === lo || j === hi;
+    for (let i = lo; i <= hi; i++) V[row + i - lo] = (edge || i === lo || i === hi) ? -1e9 : F[src + wr[i - lo]] - th;
+  }
   const sx = [], sy = [], sk = [], ek = [], start = new Int32Array(w * w * 2).fill(-1), cx = [0, 0, 0, 0], cy = [0, 0, 0, 0], ck = [0, 0, 0, 0], ct = [0, 0, 0, 0];
   for (let j = 0; j < w - 1; j++) for (let i = 0; i < w - 1; i++) {
     const a = V[j * w + i], b = V[j * w + i + 1], c = V[(j + 1) * w + i + 1], d = V[(j + 1) * w + i];
@@ -1390,24 +1415,70 @@ for (const [id, name, family, busy, fn] of DEFS) { BY_ID[id] = fn; LIST.push({ i
 
 const normCol = (c, d) => Array.isArray(c) && c.length >= 3 ? [c[0] | 0, c[1] | 0, c[2] | 0] : d;
 
-function renderLayer(W, H, id, S, scale, angle, fg, fg2, bg, seed) {
-  const pi = pool.findIndex(c => c.width === W && c.height === H);
-  const layer = pi >= 0 ? pool.splice(pi, 1)[0] : makeCanvas(W, H), g = layer.getContext("2d");
-  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H); g.globalAlpha = 1; g.globalCompositeOperation = "source-over";
+/* The drawing state a pattern function gets. With `fills` set, nothing is drawn: fillTile only notes what it
+   would fill, and any other drawing touches the missing context and throws (see plan). */
+function makeP(g, W, H, id, S, scale, angle, fg, fg2, bg, seed, fills) {
   const cx = Math.round(W / 2), cy = Math.round(H / 2), ang = angle * Math.PI / 180;
   const R = Math.ceil(Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy))) + 2;
   const ca = Math.cos(-ang), sa = Math.sin(-ang), cb = Math.cos(ang), sb = Math.sin(ang);
-  g.translate(cx, cy); if (ang) g.rotate(ang);
-  const P = {
+  return {
     hx: (W * Math.abs(cb) + H * Math.abs(sb)) / 2 + 2, hy: (W * Math.abs(sb) + H * Math.abs(cb)) / 2 + 2,
-    g, W, H, S, scale, k: scale / 100, s: S * scale / 100, R, ang, cx, cy, fg, fg2, bg, seed, id,
+    g, W, H, S, scale, k: scale / 100, s: S * scale / 100, R, ang, cx, cy, fg, fg2, bg, seed, id, fills,
     rnd: (() => { const r = mulberry32(hashStr(id + "#" + seed)); r(); r(); return r; })(),
     tkey: [id, S, scale, fg, fg2, bg, seed].join("|"),
     vis: (x, y, m) => { const X = x * cb - y * sb + cx, Y = x * sb + y * cb + cy; return X > -m && X < W + m && Y > -m && Y < H + m; },
     toFrame: (x, y) => { const dx = x - cx, dy = y - cy; return [dx * ca - dy * sa, dx * sa + dy * ca]; },
   };
+}
+function renderLayer(W, H, id, S, scale, angle, fg, fg2, bg, seed) {
+  const layer = makeCanvas(W, H), g = layer.getContext("2d"), P = makeP(g, W, H, id, S, scale, angle, fg, fg2, bg, seed, null);
+  g.translate(P.cx, P.cy); if (P.ang) g.rotate(P.ang);
   g.save(); BY_ID[id](P); g.restore();
   return layer;
+}
+/* A pattern that is a single tile fill, unrotated, needs no full-size layer: the tile is filled straight onto the
+   target at `alpha`. A layer holds exactly the tile's pixels in that case, so the result is the same, minus a
+   sleeve-sized canvas and two passes over it. Returns the fill [tile, ox, oy], or null when the pattern needs a layer. */
+const needsLayer = new Set();   // pattern ids that draw more than one tile fill
+function plan(W, H, id, S, scale, fg, fg2, bg, seed) {
+  if (needsLayer.has(id)) return null;
+  const fills = [];
+  try { BY_ID[id](makeP(null, W, H, id, S, scale, 0, fg, fg2, bg, seed, fills)); }
+  catch (e) { needsLayer.add(id); return null; }
+  if (fills.length !== 1) { needsLayer.add(id); return null; }
+  return fills[0];
+}
+/* Only where the target maps user space onto whole device pixels, so tile pixels land exactly as a layer's would. */
+const pixelAligned = (ctx) => { const t = ctx.getTransform(); return t.a === 1 && t.b === 0 && t.c === 0 && t.d === 1 && Number.isInteger(t.e) && Number.isInteger(t.f); };
+const MAX_COPIES = 400;
+/* Draws a single-fill pattern without a layer; false when it can't (the caller then uses a layer).
+   Normal drawing lays whole copies of the tile with drawImage, the same operation (and so the same rounding) as
+   laying the layer itself; a pattern fill blends a shade differently there, and so do many small draws under a
+   clip, which is why callers only ask for this (o.unclipped) when they haven't clipped. Masking ("source-in", the
+   pattern inside a shape) needs one operation covering everything, and there a pattern fill matches the layer. */
+function direct(ctx, W, H, id, S, scale, fg, fg2, bg, seed, alpha) {
+  const op = ctx.globalCompositeOperation;
+  if (op !== "source-over" && op !== "source-in") return false;
+  const f = plan(W, H, id, S, scale, fg, fg2, bg, seed); if (!f) return false;
+  const [c, ox, oy] = f, tw = c.width, th = c.height;
+  // the tile's origin sits where it would in the layer: (cx + ox, cy + oy)
+  const x0 = Math.round(W / 2) + Math.round(ox), y0 = Math.round(H / 2) + Math.round(oy);
+  if (op === "source-in") {
+    const pat = ctx.createPattern(c, "repeat"); if (!pat.setTransform) return false;
+    pat.setTransform(new DOMMatrix([1, 0, 0, 1, x0, y0]));
+    ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = pat; ctx.fillRect(0, 0, W, H); ctx.restore();
+    return true;
+  }
+  const mx = ((x0 % tw) + tw) % tw, my = ((y0 % th) + th) % th, sx = mx ? mx - tw : 0, sy = my ? my - th : 0;   // the first copy, at or left of / above 0
+  if (Math.ceil((W - sx) / tw) * Math.ceil((H - sy) / th) > MAX_COPIES) return false;
+  ctx.save(); ctx.globalAlpha = alpha;
+  // Whole copies only (a part-tile source rectangle samples differently); clipped to the layer's area when the
+  // target reaches past it. A whole-pixel rectangle clip changes nothing else.
+  const t = ctx.getTransform();
+  if (t.e < 0 || t.f < 0 || t.e + W < ctx.canvas.width || t.f + H < ctx.canvas.height) { ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip(); }
+  for (let y = sy; y < H; y += th) for (let x = sx; x < W; x += tw) ctx.drawImage(c, x, y);
+  ctx.restore();
+  return true;
 }
 
 function draw(ctx, W, H, id, o = {}) {
@@ -1418,9 +1489,17 @@ function draw(ctx, W, H, id, o = {}) {
   const fg = normCol(o.fg, [0, 0, 0]), fg2 = normCol(o.fg2, fg), bg = normCol(o.bg, [255, 255, 255]), seed = (o.seed | 0) >>> 0;
   const key = [id, W, H, S, scale, angle, fg, fg2, bg, seed].join("|");
   let layer = layerCache.get(key);
+  if (!layer && o.unclipped && !angle && pixelAligned(ctx) && direct(ctx, W, H, id, S, scale, fg, fg2, bg, seed, alpha)) return;
   if (!layer) { layer = renderLayer(W, H, id, S, scale, angle, fg, fg2, bg, seed); layerCache.set(key, layer); }
   ctx.save(); ctx.globalAlpha = alpha; ctx.drawImage(layer, 0, 0, W, H); ctx.restore();
 }
 
-window.Patterns = { LIST, draw, FAMILIES: ["fabric", "plaid", "check", "dots", "lines", "rays", "tile", "organic", "camo", "animal"], clearCache() { layerCache.clear(); tileCache.clear(); motifCache.clear(); } };
+window.Patterns = {
+  LIST, draw, FAMILIES: ["fabric", "plaid", "check", "dots", "lines", "rays", "tile", "organic", "camo", "animal"], LOW_MEMORY, release,
+  clearCache() { layerCache.clear(); tileCache.clear(); motifCache.clear(); },
+  /* Lets go of cached canvases beyond the cache budgets (after a big render). */
+  trim() { layerCache.trim(); tileCache.trim(); },
+  /* Pixels held by the caches, for tests. */
+  cached() { return { layers: layerCache.used, tiles: tileCache.used }; },
+};
 })();

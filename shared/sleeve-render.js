@@ -480,7 +480,7 @@ function drawPattern(ctx, W, H, st, bg, ink, spot, k, clip, bgOverride) {
   if (clip) { ctx.beginPath(); clip(ctx); ctx.clip("evenodd"); }
   try {
     Patterns.draw(ctx, W, H, st.pattern, { S: Math.min(W, H), scale: st.patternScale, angle: st.patternAngle, fg, fg2, bg: bgOverride || bg,
-      alpha: Math.min(1, (st.patternAmt / 100) * k), seed: st.patternSeed || 1 });
+      alpha: Math.min(1, (st.patternAmt / 100) * k), seed: st.patternSeed || 1, unclipped: !clip });
   } catch (e) { console.error(e); }
   ctx.restore();
 }
