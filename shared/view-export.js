@@ -167,11 +167,17 @@ async function filesOf(o) {
 }
 
 /* ---------- selection ---------- */
+/* A saved selection only covers the files that existed when it was made: newer ones start at their default. */
+const ADDED_LATER = new Set(["cover3000jpg", "info"]);
 function picked() {
-  const p = SP.get().promo && SP.get().promo.picked;
-  return new Set(Array.isArray(p) ? p : OUTS.filter(o => !DEFAULT_OFF.has(o.id)).map(o => o.id));
+  const pr = SP.get().promo || {}, p = pr.picked;
+  if (!Array.isArray(p)) return new Set(OUTS.filter(o => !DEFAULT_OFF.has(o.id)).map(o => o.id));
+  const known = Array.isArray(pr.known) ? new Set(pr.known) : new Set(OUTS.map(o => o.id).filter(id => !ADDED_LATER.has(id)));
+  const s = new Set(p);
+  for (const o of OUTS) if (!known.has(o.id) && !DEFAULT_OFF.has(o.id)) s.add(o.id);
+  return s;
 }
-function setPicked(set) { SP.patch("promo", { picked: OUTS.map(o => o.id).filter(id => set.has(id)) }, { undo: false }); }
+function setPicked(set) { SP.patch("promo", { picked: OUTS.map(o => o.id).filter(id => set.has(id)), known: OUTS.map(o => o.id) }, { undo: false }); }
 
 /* ---------- view ---------- */
 let root = null, visible = false, cards = new Map(), zipBtn = null, countOut = null, checksEl = null, storeEl = null, fields = {};

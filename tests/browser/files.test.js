@@ -127,6 +127,20 @@ test("release kit zip: one top folder, a folder per group, README first, manifes
   await a.close();
 });
 
+test("a selection saved before the JPEG and release info existed still ticks them; unticking sticks", { skip }, async () => {
+  const a = await open();
+  await release(a);
+  await a.page.evaluate(() => { SP.patch("promo", { picked: ["cover3000", "youtube"] }); location.hash = "#export"; });
+  await a.page.waitForFunction(() => document.querySelector("#ex-count").textContent === "4 selected");
+  for (const id of ["cover3000", "cover3000jpg", "info", "youtube"]) assert.equal(await a.page.locator("#ex-pick-" + id).isChecked(), true, id);
+  assert.equal(await a.page.locator("#ex-pick-cover1400").isChecked(), false);
+  await a.page.locator("#ex-pick-info").uncheck();
+  await a.page.waitForFunction(() => document.querySelector("#ex-count").textContent === "3 selected");
+  assert.equal(await a.page.locator("#ex-pick-info").isChecked(), false);
+  assert.deepEqual(a.errors, []);
+  await a.close();
+});
+
 test("file names keep accented letters as plain ones", { skip }, async () => {
   const a = await open();
   await a.page.evaluate(() => SP.patch("release", { artist: "Björk", title: "Homogénic", catalog: "TPLP71", footer: "" }));
