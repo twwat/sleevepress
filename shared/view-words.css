@@ -57,7 +57,7 @@
 
 /* ---- Suno style ---- */
 .view-forge .out.big { font-size: 13.5px; color: var(--chalk); min-height: 64px; }
-.view-forge .counter.over { color: var(--lamp-soft); }
+.view-forge .counter.over { color: var(--lamp-text); }
 .view-forge .variants { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; }
 .view-forge .var { border: 1px solid var(--rule); background: var(--room); padding: 10px; display: grid; gap: 8px; font: 12px/1.5 var(--f-mono); color: var(--chalk-dim); min-width: 0; align-content: space-between; }
 .view-forge .var .p { overflow-wrap: anywhere; color: var(--chalk); }
@@ -95,3 +95,6 @@
 .view-forge #sf-bank .it > .a { flex-direction: column; align-items: stretch; }
 .view-forge label.f > span { min-height: 28px; }
 .view-titles .view-head > div:first-child, .view-forge .view-head > div:first-child { flex: 1 1 320px; }
+/* Genre: the lock button sits beside the label, not inside it (a button inside a label is read as part of the field's name) */
+.view-forge div.f { display: grid; gap: 5px; min-width: 0; }
+.view-forge div.f > .legend { min-height: 28px; }
