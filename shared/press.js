@@ -393,7 +393,7 @@ const library = {
     if (!id || !prev) { id = "r" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36); }
     rec.libId = id;
     const auto = [rec.release.artist, titleLine(rec.release)].filter(Boolean).join(" — ") || "Untitled";
-    const entry = { id, name: prev && prev.custom ? prev.name : auto, custom: !!(prev && prev.custom), catalog: rec.release.catalog, updated: Date.now(), thumb: thumbUrl || null };
+    const entry = { id, name: prev && prev.custom ? prev.name : auto, custom: !!(prev && prev.custom), catalog: rec.release.catalog, year: rec.release.year, updated: Date.now(), thumb: thumbUrl || null };
     if (!(await vault.set("lib." + id, { record: rec, image: await cover.data(), imageMeta: cover.meta() }))) { if (!prev) mem.delete("lib." + id); return null; }
     if (!(await vault.set("lib.index", [entry, ...idx.filter(e => e.id !== id)]))) { if (!prev) { mem.delete("lib." + id); vault.del("lib." + id); } return null; }
     db.libId = id; persistSoon(); library.changed(); keepStorage();
@@ -424,7 +424,7 @@ const library = {
       if (!r || !r.entry || typeof r.entry.id !== "string" || !r.record || typeof r.record !== "object") continue;
       const rec = mergeDefaults(r.record); rec.libId = r.entry.id;
       const entry = { id: r.entry.id, name: typeof r.entry.name === "string" && r.entry.name ? r.entry.name : (titleLine(rec.release) || "Untitled"),
-        custom: !!r.entry.custom, catalog: rec.release.catalog, updated: typeof r.entry.updated === "number" ? r.entry.updated : Date.now(), thumb: ownThumb(r.entry.thumb) };
+        custom: !!r.entry.custom, catalog: rec.release.catalog, year: rec.release.year, updated: typeof r.entry.updated === "number" ? r.entry.updated : Date.now(), thumb: ownThumb(r.entry.thumb) };
       const image = typeof r.image === "string" && r.image.startsWith("data:image/") ? r.image : null;
       if (!(await vault.set("lib." + entry.id, { record: rec, image, imageMeta: image && r.imageMeta && typeof r.imageMeta === "object" ? r.imageMeta : null }))) continue;
       idx.splice(0, idx.length, ...[entry, ...idx.filter(e => e.id !== entry.id)]); n++;
