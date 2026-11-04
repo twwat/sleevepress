@@ -64,6 +64,13 @@ function centroid(pg) {
 
 /* ---------- scratch canvases ---------- */
 const pool = {};
+/* Frees scratch canvases over `maxPx` pixels (after a big render; they regrow when next needed). Returns the
+   pixels still held. */
+function trim(maxPx) {
+  let held = 0;
+  for (const c of Object.values(pool)) { if (c.width * c.height > maxPx) { c.width = 0; c.height = 0; } held += c.width * c.height; }
+  return held;
+}
 function scratch(name, w, h) {
   let c = pool[name];
   if (!c) c = pool[name] = document.createElement("canvas");
@@ -598,6 +605,6 @@ function drawMark(ctx, id, x, top, w, h, o) {
 window.Glyphs = {
   SHAPES: SHAPE_DEFS.map(({ id, name, family, round }) => ({ id, name, family, round })),
   MARKS: MARK_DEFS.map(({ id, name, round }) => ({ id, name, round })),
-  drawShape, drawMark,
+  drawShape, drawMark, trim,
 };
 })();

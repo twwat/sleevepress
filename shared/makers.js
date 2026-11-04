@@ -403,6 +403,7 @@ async function promo(e, id, scale = 1) {
     put(ctx, title, x, H * 0.89, W * 0.05, st.font, "700", tk, ink, 1, cw);
     finish(ctx, W, H, st);
   }
+  SR.trimScratch();   // the backdrop's shape mask and pattern layer aren't needed once the promo is drawn
   return c;
 }
 

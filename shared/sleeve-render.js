@@ -143,6 +143,42 @@ function applyCase(t, mode) {
   return t.toUpperCase();
 }
 
+/* ---------- scratch canvases ----------
+   The words layer, the shape mask and the title-cut layers are borrowed for one step of a render and handed back,
+   so one canvas serves them in turn instead of a new sleeve-sized one each time. After a render, idle ones beyond a
+   small allowance (enough for the editor's preview) are freed on the spot: iOS Safari counts every live canvas
+   against a page-wide limit, and would otherwise hold a 3000 px export's 36 MB layers until garbage collection. */
+const LOW_MEMORY = !!(window.Patterns && Patterns.LOW_MEMORY);
+const KEEP_PX = LOW_MEMORY ? 1.5e6 : 3.2e6;   // ~one (two) 1200 px layers
+const idle = [];
+/* A canvas of exactly w × h, blank, with a fresh context state (as a new one would have). */
+function borrow(w, h) {
+  const i = idle.findIndex(c => c.width === w && c.height === h);
+  const c = i >= 0 ? idle.splice(i, 1)[0] : idle.pop() || document.createElement("canvas");
+  if (i >= 0) { const g = c.getContext("2d"); if (g.reset) g.reset(); else c.width = w; }   // setting the width clears and resets too
+  else { c.width = w; c.height = h; }
+  return c;
+}
+function giveBack(c) { if (c && !idle.includes(c)) idle.push(c); }
+/* Frees idle canvases (largest first) down to the allowance, and the pattern and glyph caches' oversized ones. */
+function trimScratch() {
+  idle.sort((a, b) => b.width * b.height - a.width * a.height);
+  let px = idle.reduce((t, c) => t + c.width * c.height, 0);
+  while (idle.length && (px > KEEP_PX || idle.length > 3)) { const c = idle.shift(); px -= c.width * c.height; c.width = 0; c.height = 0; }
+  if (window.Patterns && Patterns.trim) Patterns.trim();
+  if (window.Glyphs && Glyphs.trim) Glyphs.trim(LOW_MEMORY ? 0.6e6 : 1.5e6);
+}
+/* Pixels held by idle scratch canvases, for tests. */
+const scratchPixels = () => idle.reduce((t, c) => t + c.width * c.height, 0);
+/* Lets the page get on with other work (input, painting, timers) between the steps of a big render. A message
+   rather than a timer, which background tabs slow to once a second; and not scheduler.yield, which puts the
+   render ahead of everything else that is waiting. */
+const pause = (() => {
+  const ch = new MessageChannel(), q = [];
+  ch.port1.onmessage = () => q.shift()();
+  return () => new Promise(r => { q.push(r); ch.port2.postMessage(0); });
+})();
+
 /* ---------- image toning ---------- */
 const imageIds = new WeakMap(); let imageSeq = 0;
 let tonedCache = { key: null, canvas: null };
@@ -523,12 +559,12 @@ function drawBackdrop(ctx, W, H, st, bg, ink, spot, k = 1) {
     if (hasPattern && st.patternArea === "shape") {
       // the pattern lives inside the shape's silhouette
       shapeAt(col, a);
-      const m = document.createElement("canvas"); m.width = Math.ceil(W); m.height = Math.ceil(H);
-      const mc = m.getContext("2d");
+      const m = borrow(Math.ceil(W), Math.ceil(H)), mc = m.getContext("2d");
       drawShape(mc, { ...st, shapeOutline: false }, cx, cy, r, [0, 0, 0], 1, [0, 0, 0], bg, S);
       mc.globalCompositeOperation = "source-in";
       drawPattern(mc, W, H, st, bg, col === ink ? spot : ink, col === ink ? spot : ink, k / Math.max(0.2, st.patternAmt / 100) * 0.9, null, bg);
       ctx.save(); ctx.globalAlpha = Math.min(1, (st.patternAmt / 100) * 1.4); ctx.drawImage(m, 0, 0); ctx.restore();
+      giveBack(m);
     } else shapeAt(col, a);
   }
   if (st.texture && st.texture !== "none" && st.textureAmt > 0) {
@@ -780,18 +816,33 @@ function sideRect(side, x, y, w, h) {
   const x0 = Math.min(...xs), y0 = Math.min(...ys);
   return { x: x0, y: y0, w: Math.max(...xs) - x0, h: Math.max(...ys) - y0 };
 }
-/* A scratch layer the size of the target with the same transform, for treatments that cut into the letters. */
-let scratch = null;
-function layerFor(ctx) {
-  const c = ctx.canvas;
-  if (!scratch) scratch = document.createElement("canvas");
-  if (scratch.width !== c.width || scratch.height !== c.height) { scratch.width = c.width; scratch.height = c.height; }
-  const g = scratch.getContext("2d");
-  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1; g.clearRect(0, 0, c.width, c.height);
-  g.setTransform(ctx.getTransform()); g.textBaseline = ctx.textBaseline;
+/* A scratch layer with the target's transform, for treatments that cut into the letters. It covers only `box`
+   (x, y, w, h in the target's user space, which must hold everything drawn on it), on whole device pixels, so
+   it lands exactly where a full-size layer would. */
+function layerFor(ctx, box) {
+  const t = ctx.getTransform(), W = ctx.canvas.width, H = ctx.canvas.height;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of [[box.x, box.y], [box.x + box.w, box.y], [box.x, box.y + box.h], [box.x + box.w, box.y + box.h]]) {
+    const X = t.a * x + t.c * y + t.e, Y = t.b * x + t.d * y + t.f;
+    x0 = Math.min(x0, X); y0 = Math.min(y0, Y); x1 = Math.max(x1, X); y1 = Math.max(y1, Y);
+  }
+  x0 = Math.max(0, Math.floor(x0) - 2); y0 = Math.max(0, Math.floor(y0) - 2); x1 = Math.min(W, Math.ceil(x1) + 2); y1 = Math.min(H, Math.ceil(y1) + 2);
+  const c = borrow(Math.max(1, x1 - x0), Math.max(1, y1 - y0)), g = c.getContext("2d");
+  g.setTransform(t.a, t.b, t.c, t.d, t.e - x0, t.f - y0); g.textBaseline = ctx.textBaseline;
+  g._at = [x0, y0];
   return g;
 }
-function stampLayer(ctx, g) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(g.canvas, 0, 0); ctx.restore(); }
+/* Lays the layer on the target (whole, at its whole-pixel spot) and hands its canvas back. */
+function stampLayer(ctx, g) {
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(g.canvas, g._at[0], g._at[1]); ctx.restore();
+  giveBack(g.canvas);
+}
+/* Room round a line of title letters for any glyph's ink (accents, tails, overhangs), in its own units. */
+const inkBox = (placed) => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  placed.forEach(p => { x0 = Math.min(x0, p.x - p.size); x1 = Math.max(x1, p.x + p.w + p.size); y0 = Math.min(y0, p.y - p.size * 1.6); y1 = Math.max(y1, p.y + p.size * 0.8); });
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+};
 const heightOf = (g, p, lower) => { g.font = p.font; return g.measureText(lower ? "x" : "H").actualBoundingBoxAscent || p.size * (lower ? 0.5 : 0.72); };
 const fillLines = (g, placed, o, col) => placed.forEach(p => { g.font = p.font; g.fillStyle = rgba(col || p.col, 1); drawTracked(g, p.l, p.x, p.y, o.trackEm, p.size); });
 /* The newer title treatments. Each returns { paint, box?, grow? }: box replaces the measured plate, grow widens it. */
@@ -813,7 +864,7 @@ const TITLE_FX = {
   stencil(ctx, placed, o) {
     const lower = o.st.titleCase === "lower";
     return { paint() {
-      const g = layerFor(ctx); fillLines(g, placed, o);
+      const g = layerFor(ctx, inkBox(placed)); fillLines(g, placed, o);
       g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
       placed.forEach(p => { const h = heightOf(g, p, lower), t = Math.max(1.2, p.size * 0.055); g.fillRect(p.x - p.size, p.y - h * 0.52 - t / 2, p.w + p.size * 2, t); });
       stampLayer(ctx, g);
@@ -823,7 +874,7 @@ const TITLE_FX = {
   stripe(ctx, placed, o) {
     const lower = o.st.titleCase === "lower";
     return { paint() {
-      const g = layerFor(ctx); fillLines(g, placed, o);
+      const g = layerFor(ctx, inkBox(placed)); fillLines(g, placed, o);
       g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
       placed.forEach(p => {
         const h = heightOf(g, p, lower), n = Math.max(3, Math.round(h / (p.size * 0.11))), pitch = h / (n - 0.4), gap = pitch * 0.4;
@@ -840,7 +891,7 @@ const TITLE_FX = {
     const box = { left: left - pad, right: right + pad, top: top - pad, bot: placed[placed.length - 1].y + pad };
     ctx.font = placed[placed.length - 1].font;
     return { box, paint() {
-      const g = layerFor(ctx); g.fillStyle = rgba(col, 1); g.fillRect(box.left, box.top, box.right - box.left, box.bot - box.top);
+      const g = layerFor(ctx, { x: box.left, y: box.top, w: box.right - box.left, h: box.bot - box.top }); g.fillStyle = rgba(col, 1); g.fillRect(box.left, box.top, box.right - box.left, box.bot - box.top);
       g.globalCompositeOperation = "destination-out"; fillLines(g, placed, o, [0, 0, 0]);
       stampLayer(ctx, g);
     } };
@@ -858,11 +909,19 @@ const TITLE_FX = {
 };
 
 /* ---------- the sleeve ---------- */
+/* Big renders (exports) pause between steps so the page stays responsive; the picture is the same either way. */
+const PAUSE_PX = 1.5e6;
 async function render(canvas, state, image, logo) {
+  let words = null;
+  try { return await renderSleeve(canvas, state, image, logo, (c) => (words = c)); }
+  finally { giveBack(words); trimScratch(); }
+}
+async function renderSleeve(canvas, state, image, logo, keepWords) {
   const st = state, S = canvas.width;
   const base = canvas.getContext("2d");
   let ctx = base;   // switches to a separate words layer while plates are on (see below)
   await loadFonts(st);
+  const step = canvas.width * canvas.height >= PAUSE_PX ? pause : () => null;
   const boxes = {};
 
   const bg = hexToRgb(st.bg) || [21, 18, 15];
@@ -884,10 +943,13 @@ async function render(canvas, state, image, logo) {
     ctx.restore();
     boxes.image = { x: b.x, y: b.y, w: b.w, h: b.h };
   }
+  await step();
 
   drawBackdrop(ctx, S, S, st, bg, ink, spot);
+  await step();
   applyVignette(ctx, S, S, st, bg, ink);
   drawFrame(ctx, S, S, st, ink, spot);
+  await step();
 
   const X = S * st.margin / 100;
   const alignOf = (el) => st[el + "Align"] || st.align;
@@ -905,9 +967,7 @@ async function render(canvas, state, image, logo) {
   const plates = [];
   const plate = (el, x, y, w, h, px, py = px) => { if (plateOn(el) && w > 0) plates.push([x - px, y - py, w + px * 2, h + py * 2]); };
   let words = null;
-  if (st.plates && st.plates !== "none") {
-    words = document.createElement("canvas"); words.width = canvas.width; words.height = canvas.height; ctx = words.getContext("2d");
-  }
+  if (st.plates && st.plates !== "none") { words = keepWords(borrow(canvas.width, canvas.height)); ctx = words.getContext("2d"); }
   ctx.textBaseline = "alphabetic";
 
   // Artist (+ year)
@@ -1108,6 +1168,7 @@ async function render(canvas, state, image, logo) {
   const lb = drawLabelMark(ctx, S, st, S * st.labelX / 100, S * st.labelY / 100, colourOf(st.labelColor), bodyFace, logo);
   if (lb) boxes.label = lb;
 
+  await step();
   if (words) {
     ctx = base;
     ctx.fillStyle = rgba(bg, 1); plates.forEach(r => ctx.fillRect(...r));
@@ -1127,5 +1188,6 @@ window.SleeveRender = {
   SLEEVE_DEFAULTS, TITLE_STYLES, IMG_EFFECTS, TITLE_ROTATES, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
   loadFont, loadFonts, weightFor, faceStack, fontInfo, drawTracked, measureTracked, applyCase, drawBarcode, barcodeWidth, barcodeReversed, eanDigits,
   applyGrain, applyVignette, drawBackdrop, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth, drawShape, drawPattern, patternClip, BUILTIN_MARKS,
+  trimScratch, scratchPixels,
 };
 })();
