@@ -1359,6 +1359,102 @@ function snakeskin(P) {
 }
 
 /* ======================================================================
+   PSYCH: banded fields. A smooth field is sampled on a coarse grid, then every pixel reads it
+   bilinearly and is coloured by which band of a "sett" it falls in, anti-aliased by its distance to the
+   nearest band edge (field difference / field gradient). Crisp at any size, two inks on a clear ground.
+   ====================================================================== */
+/* sett: [[ink, width], ...] with ink 0 = ground (clear), 1 = fg, 2 = fg2. gridPx: grid step as a fraction of P.s. */
+function bandField(P, field, sett, gridPx) {
+  const W = P.W, H = P.H, step = Math.max(2, (gridPx || 1 / 160) * P.s);   // grid follows the pattern's own scale
+  // built as a layer-sized canvas in screen pixels, in steps (a 3000 px sleeve is ~9 Mpx of per-pixel work)
+  const c = tile(P, "band|" + Math.round(P.ang * 1e4), W, H, function* (g) {
+    const nx = Math.ceil(W / step) + 2, ny = Math.ceil(H / step) + 2;
+    const ca = Math.cos(-P.ang), sa = Math.sin(-P.ang), cx = P.cx, cy = P.cy, u = P.s;
+    const v = new Float32Array(nx * ny);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const X = i * step - cx, Y = j * step - cy;
+      v[j * nx + i] = field((X * ca - Y * sa) / u, (X * sa + Y * ca) / u);   // field works in pattern units
+    }
+    yield;
+    const tot = sett.reduce((a, s) => a + s[1], 0), cuts = [], inks = [];
+    let acc = 0; for (const [k, w] of sett) { cuts.push(acc / tot); inks.push(k); acc += w; }
+    const n = sett.length, col = [[0, 0, 0, 0], [...P.fg, 255], [...P.fg2, 255]];
+    const rows = Math.max(1, Math.floor(400000 / W));
+    for (let y0 = 0; y0 < H; y0 += rows) {
+      const h = Math.min(rows, H - y0), im = g.createImageData(W, h), d = im.data;
+      for (let y = y0; y < y0 + h; y++) {
+        const gy = y / step, j = Math.min(ny - 2, gy | 0), fy = gy - j;
+        for (let x = 0; x < W; x++) {
+          const gx = x / step, i = Math.min(nx - 2, gx | 0), fx = gx - i, o = j * nx + i;
+          const a = v[o], b = v[o + 1], c4 = v[o + nx + 1], e = v[o + nx];
+          const t = a + (b - a) * fx + (e - a) * fy + (a - b - e + c4) * fx * fy;
+          const tx = ((b - a) + (a - b - e + c4) * fy) / step, ty = ((e - a) + (a - b - e + c4) * fx) / step;
+          const grad = Math.hypot(tx, ty) + 1e-9;
+          let f = t - Math.floor(t), s = n - 1; for (let q = 1; q < n; q++) if (f < cuts[q]) { s = q - 1; break; }
+          // distance (px) to this band's lower and upper edges; blend toward the nearer neighbour
+          const lo = (f - cuts[s]) / grad, hi = ((s + 1 < n ? cuts[s + 1] : 1) - f) / grad;
+          const near = lo < hi ? (s + n - 1) % n : (s + 1) % n, dist = Math.min(lo, hi);
+          const w = dist >= 0.5 ? 1 : 0.5 + dist, A = col[inks[s]], B = col[inks[near]];
+          const aa = A[3] * w + B[3] * (1 - w), q4 = ((y - y0) * W + x) * 4;
+          if (aa <= 0) continue;
+          d[q4] = (A[0] * A[3] * w + B[0] * B[3] * (1 - w)) / aa; d[q4 + 1] = (A[1] * A[3] * w + B[1] * B[3] * (1 - w)) / aa;
+          d[q4 + 2] = (A[2] * A[3] * w + B[2] * B[3] * (1 - w)) / aa; d[q4 + 3] = aa;
+        }
+      }
+      g.putImageData(im, 0, y0);
+      yield;
+    }
+  });
+  screen(P, (g) => g.drawImage(c, 0, 0));
+}
+/* warped-noise helpers in pattern units */
+function flowNoise(seed) {
+  const n1 = perlin(seed), n2 = perlin(seed + 101), n3 = perlin(seed + 202);
+  return { n1, n2, n3, warp: (x, y, f) => [n2(x * f * 0.6 + 3.1, y * f * 0.6) * 0.35, n3(x * f * 0.6 + 7.7, y * f * 0.6) * 0.35] };
+}
+const vortex = (x, y, vs) => {
+  for (const [cx, cy, R, turns] of vs) {
+    const dx = x - cx, dy = y - cy, r2 = (dx * dx + dy * dy) / (R * R), a = turns * TAU * Math.exp(-r2), c = Math.cos(a), s = Math.sin(a);
+    x = cx + dx * c - dy * s; y = cy + dx * s + dy * c;
+  }
+  return [x, y];
+};
+const SETT2 = [[[0, 1], [1, 0.75]], [[0, 1], [1, 1]], [[0, 1.4], [1, 0.4]]];
+const SETT3 = [[[0, 1], [1, 0.42], [0, 0.55], [2, 0.38]], [[0, 1], [1, 0.5], [2, 0.5]], [[0, 0.7], [1, 0.3], [0, 0.3], [2, 0.7], [0, 0.3], [1, 0.3]]];
+const pickSett = (P) => { const L = P.fg2 === P.fg || P.fg2.join() === P.fg.join() ? SETT2 : SETT3.concat(SETT2.slice(0, 1)); return L[(P.rnd() * L.length) | 0]; };
+
+/* Flow: stripes bent by a slow current and a vortex or two (60s/70s liquid). */
+function flow(P) {
+  const r = P.rnd, N = flowNoise(P.seed), f = 0.9 + r() * 1.2, amp = 1 + r() * 2.5, per = 0.07 + r() * 0.05, an = 1.2 + r() * 1.4, swell = 0.3 + r() * 0.5;
+  const vs = []; for (let k = 0, m = r() < 0.75 ? 1 + (r() < 0.4) : 0; k < m; k++) vs.push([(r() - 0.5) * 1.4, (r() - 0.5) * 1.4, 0.18 + r() * 0.22, (0.3 + r() * 0.35) * (r() < 0.5 ? -1 : 1)]);
+  const sett = pickSett(P);
+  bandField(P, (x0, y0) => {
+    const [x, y] = vortex(x0, y0, vs), [wx, wy] = N.warp(x, y, f);
+    const d = N.n1((x + wx) * f / an, (y + wy) * f) + 0.3 * N.n1(x * f * 2.7 / an + 9, y * f * 2.7);
+    const sw = 1 + swell * N.n3(x * 1.6 + 17, y * 1.6);   // swelling: speeds the phase up and down
+    return (y / per) * (0.85 + 0.15 * sw) + d * amp;
+  }, sett);
+}
+/* Op melt: fine two-ink stripes, heavily warped, so they bunch tight and open wide (op-art). */
+function opmelt(P) {
+  const r = P.rnd, N = flowNoise(P.seed), f = 1.1 + r() * 0.8, amp = 4 + r() * 4, per = 0.025 + r() * 0.015;
+  const vs = r() < 0.6 ? [[(r() - 0.5), (r() - 0.5), 0.2 + r() * 0.2, (0.25 + r() * 0.3) * (r() < 0.5 ? -1 : 1)]] : [];
+  bandField(P, (x0, y0) => {
+    const [x, y] = vortex(x0, y0, vs), [wx, wy] = N.warp(x, y, f);
+    return y / per + amp * (N.n1((x + wx) * f / 1.5, (y + wy) * f) + 0.4 * N.n1(x * f * 2.3 + 5, y * f * 2.3));
+  }, [[0, 1], [1, 1]], 1 / 220);
+}
+/* Bloom: concentric star rings out from a centre, the petals twisting as they grow (60s poster). */
+function bloom(P) {
+  const r = P.rnd, k = 5 + ((r() * 9) | 0), tw = (r() - 0.5) * 1.6, depth = 0.12 + r() * 0.2, per = 0.06 + r() * 0.05;
+  const ox = (r() - 0.5) * 0.9, oy = (r() - 0.5) * 0.9, sett = pickSett(P);
+  bandField(P, (x, y) => {
+    const dx = x - ox, dy = y - oy, rr = Math.hypot(dx, dy), a = Math.atan2(dy, dx);
+    return rr * (1 + depth * Math.cos(k * a + tw * rr * 6)) / per;
+  }, sett);
+}
+
+/* ======================================================================
    registry
    ====================================================================== */
 const DEFS = [
@@ -1423,6 +1519,9 @@ const DEFS = [
   ["snakeskin", "Snakeskin", "animal", 0.65, snakeskin],
   ["cowhide", "Cowhide", "animal", 0.55, cowhide],
   ["dalmatian", "Dalmatian", "animal", 0.4, dalmatian],
+  ["flow", "Flow", "psych", 0.65, flow],
+  ["opmelt", "Op melt", "psych", 0.85, opmelt],
+  ["bloom", "Bloom", "psych", 0.7, bloom],
 ];
 const BY_ID = {}; const LIST = [];
 for (const [id, name, family, busy, fn] of DEFS) { BY_ID[id] = fn; LIST.push({ id, name, family, busy }); }
@@ -1454,10 +1553,10 @@ function renderLayer(W, H, id, S, scale, angle, fg, fg2, bg, seed) {
    target at `alpha`. A layer holds exactly the tile's pixels in that case, so the result is the same, minus a
    sleeve-sized canvas and two passes over it. Returns the fill [tile, ox, oy], or null when the pattern needs a layer. */
 const needsLayer = new Set();   // pattern ids that draw more than one tile fill
-function plan(W, H, id, S, scale, fg, fg2, bg, seed, later) {
+function plan(W, H, id, S, scale, fg, fg2, bg, seed, later, angle = 0) {
   if (needsLayer.has(id) && !later) return null;
   const fills = [];
-  try { BY_ID[id](makeP(null, W, H, id, S, scale, 0, fg, fg2, bg, seed, fills, later)); }
+  try { BY_ID[id](makeP(null, W, H, id, S, scale, angle, fg, fg2, bg, seed, fills, later)); }
   catch (e) { needsLayer.add(id); return null; }
   if (fills.length !== 1) { needsLayer.add(id); return null; }
   return fills[0];
@@ -1509,7 +1608,7 @@ function inputs(W, H, id, o) {
    angle), then the layer if draw will need one. Same work, same order as draw would do it, so the same pixels. */
 function* steps(W, H, id, o = {}) {
   const I = inputs(W, H, id, o); if (!I || layerCache.get(I.key)) return;
-  const later = [], f = plan(I.W, I.H, id, I.S, I.scale, I.fg, I.fg2, I.bg, I.seed, later);
+  const later = [], f = plan(I.W, I.H, id, I.S, I.scale, I.fg, I.fg2, I.bg, I.seed, later, I.angle);
   for (const job of later) {
     yield;
     while (!job.run.next().done) yield;
@@ -1542,7 +1641,7 @@ function draw(ctx, W0, H0, id, o = {}) {
 }
 
 window.Patterns = {
-  LIST, draw, prepare, steps, FAMILIES: ["fabric", "plaid", "check", "dots", "lines", "rays", "tile", "organic", "camo", "animal"], LOW_MEMORY, release,
+  LIST, draw, prepare, steps, FAMILIES: ["fabric", "plaid", "check", "dots", "lines", "rays", "tile", "organic", "camo", "animal", "psych"], LOW_MEMORY, release,
   clearCache() { layerCache.clear(); tileCache.clear(); motifCache.clear(); },
   /* Lets go of cached canvases beyond the cache budgets (after a big render). */
   trim() { layerCache.trim(); tileCache.trim(); },
