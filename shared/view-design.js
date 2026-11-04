@@ -14,7 +14,7 @@ const TABS = [
 const HIT_TAB = { title: "title", artist: "artist", footer: "footer", motif: "marks", label: "label", barcode: "label", image: "picture" };
 
 let el, st, boxes = {}, tab = "title", visible = false, writing = false, stale = true;
-let image = null, logo = null, canvas, overlay, hoverBox, selBox, editor, panel, tabsEl;
+let image = null, logo = null, canvas, overlay, hoverBox, selBox, editor, panel, tabsEl, descEl, liveEl;
 const prefs = (() => { try { return JSON.parse(localStorage.getItem("sleevepress.design") || "{}"); } catch (e) { return {}; } })();
 const savePrefs = () => { try { localStorage.setItem("sleevepress.design", JSON.stringify(prefs)); } catch (e) {} };
 
@@ -35,6 +35,7 @@ const draw = SP.rafOnce(async () => {
   if (gen !== drawGen) return;   // a newer render has started; this one is out of date
   canvas.getContext("2d").drawImage(c, 0, 0);
   boxes = b || {}; positionSel();
+  const said = describeCover(); if (descEl.textContent !== said) descEl.textContent = said;
   if (wordsBox) wordsBox._fit(!!boxes.titleShrunk && st.titleSize > (boxes.titleMaxSize || 0) + 2);
   el.querySelector(".dz-file").textContent = SR.filename(st, st.exportSize || "3000");
 });
@@ -47,11 +48,13 @@ function field(label, input, opts = {}) {
 }
 function reg(node, show, update) { ctl.push({ el: node, show, update }); if (update) update(); return node; }
 function range(k, label, min, max, step = 1, opts = {}) {
-  const out = h("output"), inp = h("input", { type: "range", min, max, step });
+  // named by its label alone (not label + the changing number beside it); the number is read as the value instead
+  const out = h("output", { "aria-hidden": "true" }), inp = h("input", { type: "range", min, max, step, "aria-label": label });
   const fmt = opts.fmt || ((v) => `${v}${opts.unit || ""}`);
-  inp.addEventListener("input", () => { out.textContent = fmt(+inp.value); set(k, +inp.value); });
-  inp.addEventListener("dblclick", () => { if (opts.reset != null) { inp.value = opts.reset; out.textContent = fmt(opts.reset); set(k, opts.reset); } });
-  return reg(field(label, inp, { out, half: opts.half }), opts.show, () => { inp.value = st[k]; out.textContent = fmt(st[k]); });
+  const show = (v) => { out.textContent = fmt(v); inp.setAttribute("aria-valuetext", fmt(v)); };
+  inp.addEventListener("input", () => { show(+inp.value); set(k, +inp.value); });
+  inp.addEventListener("dblclick", () => { if (opts.reset != null) { inp.value = opts.reset; show(opts.reset); set(k, opts.reset); } });
+  return reg(field(label, inp, { out, half: opts.half }), opts.show, () => { inp.value = st[k]; show(st[k]); });
 }
 function seg(k, label, opts, o = {}) {
   const box = h("div", { class: "seg", role: "group", "aria-label": label });
@@ -87,15 +90,18 @@ function pick(k, label, values, drawFn, o = {}) {
   });
 }
 function fontPick(k, label, o = {}) {
-  const list = h("div", { class: "dz-fonts", role: "listbox", "aria-label": label });
+  // a group of toggle buttons like every other picker here (a listbox would promise arrow keys these buttons don't have)
+  const list = h("div", { class: "dz-fonts", role: "group", "aria-label": label });
   const opts = [...(o.empty ? [["", o.empty]] : []), ...L.FONTS.map(f => [f.n, f.n])];
-  opts.forEach(([v, name]) => list.append(h("button", { type: "button", "data-v": v, role: "option", style: v ? { fontFamily: `"${v}", sans-serif`, fontWeight: SR.weightFor(v, 700) } : null, onclick: () => set(k, v) }, name)));
-  const node = h("div", { class: "f" }, h("span", { class: "legend" }, label), list);
-  return reg(node, o.show, () => list.querySelectorAll("button").forEach(b => { const on = b.dataset.v === String(st[k]); b.setAttribute("aria-selected", String(on)); b.setAttribute("aria-pressed", String(on)); }));
+  opts.forEach(([v, name]) => list.append(h("button", { type: "button", "data-v": v, style: v ? { fontFamily: `"${v}", sans-serif`, fontWeight: SR.weightFor(v, 700) } : null, onclick: () => set(k, v) }, name)));
+  const node = h("div", { class: "f" }, h("span", { class: "legend", "aria-hidden": "true" }, label), list);
+  return reg(node, o.show, () => list.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === String(st[k])))));
 }
 const colourSeg = (k, label, o = {}) => seg(k, label, [["ink", h("span", { class: "dz-dot", "data-role": "ink" }, "Ink")], ["accent", h("span", { class: "dz-dot", "data-role": "accent" }, "Spot")]], o);
 const alignSeg = (k, o = {}) => seg(k, "Alignment", [["", "Auto", "Follow the sleeve's alignment (Layout)"], ["left", "Left"], ["centre", "Centre"], ["right", "Right"]], o);
 const btn = (label, fn, cls = "btn small") => h("button", { type: "button", class: cls, onclick: fn }, label);
+/* A spoken name (and tooltip) for a button that only shows a symbol. */
+const named = (b, name) => { b.setAttribute("aria-label", name); if (!b.title) b.title = name; return b; };
 const row = (...kids) => h("div", { class: "dz-row" }, ...kids);
 const hint = (t) => h("p", { class: "hint" }, t);
 const group = (title, ...kids) => h("div", { class: "dz-group" }, title ? h("h3", {}, title) : null, ...kids);
@@ -323,7 +329,8 @@ function colourPanel() {
     const swatches = extract(image, 6), sugg = suggestions(swatches);
     const raw = h("div", { class: "dz-raw" });
     swatches.forEach(s => raw.append(h("div", { class: "dz-rawsw" }, h("i", { style: { background: s.hex }, title: s.hex }),
-      ...["bg", "ink", "accent"].map((k, i) => h("button", { type: "button", title: `Use as the ${["background", "text", "accent"][i]} colour`, onclick: () => set(k, s.hex, { paletteName: "Custom" }) }, ["Bg", "Text", "Acc"][i])))));
+      ...["bg", "ink", "accent"].map((k, i) => h("button", { type: "button", title: `Use as the ${["background", "text", "accent"][i]} colour`,
+        "aria-label": `Use ${s.hex} as the ${["background", "text", "accent"][i]} colour`, onclick: () => set(k, s.hex, { paletteName: "Custom" }) }, ["Bg", "Text", "Acc"][i])))));
     const sg = h("div", { class: "dz-pals" });
     sugg.forEach(p => sg.append(palButton(p)));
     fromPic.append(sg, h("span", { class: "legend" }, "Colours in your picture: click Bg, Text or Acc to use one"), raw);
@@ -361,7 +368,7 @@ function picturePanel() {
       row(range("imgBoxX", "Frame across", -40, 40, 0.5, { unit: "%", half: true, reset: 0 }), range("imgBoxY", "Frame down", -40, 40, 0.5, { unit: "%", half: true, reset: 0 }))] : [range("dim", "Fade into the background", 0, 95, 1, { unit: "%", reset: 60 })]),
     hint("Want the photo smaller? Pick Inset, Panel or Circle above, then Frame size.")));
   out.push(group("Crop inside the frame",
-    row(btn("−", () => set("zoom", Math.max(20, st.zoom - 10))), range("zoom", "Zoom in / out", 20, 300, 1, { unit: "%", reset: 100 }), btn("+", () => set("zoom", Math.min(300, st.zoom + 10)))),
+    row(named(btn("−", () => set("zoom", Math.max(20, st.zoom - 10))), "Zoom out"), range("zoom", "Zoom in / out", 20, 300, 1, { unit: "%", reset: 100 }), named(btn("+", () => set("zoom", Math.min(300, st.zoom + 10))), "Zoom in")),
     row(range("shiftX", "Across", -100, 100, 0.5, { unit: "%", half: true, reset: 0 }), range("shiftY", "Down", -100, 100, 0.5, { unit: "%", half: true, reset: 0 })),
     row(btn("Fit whole picture", () => setMany({ zoom: fitZoom(), shiftX: 0, shiftY: 0 })), btn("Fill", () => setMany({ zoom: 100, shiftX: 0, shiftY: 0 }))),
     hint("Drag the picture on the cover to move it; Ctrl/⌘ + scroll to zoom. Below 100% it floats on the background.")));
@@ -393,11 +400,12 @@ function labelPanel() {
       hint("The logo is kept for every release in this browser. “Drop white bg” is for logos saved on white (JPG).")));
   }
   if (st.labelMark !== "none") {
-    const corners = [["↖", 14, 9], ["↗", 86, 9], ["↙", 14, 91], ["↘", 86, 91], ["⊙", 50, 91]];
+    const corners = [["↖", 14, 9, "Top left"], ["↗", 86, 9, "Top right"], ["↙", 14, 91, "Bottom left"], ["↘", 86, 91, "Bottom right"], ["⊙", 50, 91, "Bottom centre"]];
     out.push(group("Mark",
       row(range("labelSize", "Size", 40, 260, 5, { unit: "%", half: true, reset: 100 }), range("labelOpacity", "Strength", 20, 100, 1, { unit: "%", half: true, reset: 85 })),
       colourSeg("labelColor", "Colour"),
-      h("div", { class: "chips" }, h("span", { class: "legend" }, "Place"), ...corners.map(([t, x, y]) => btn(t, () => setMany({ labelX: x, labelY: y }), "chip-b"))),
+      h("div", { class: "chips", role: "group", "aria-label": "Place the mark" }, h("span", { class: "legend", "aria-hidden": "true" }, "Place"),
+        ...corners.map(([t, x, y, name]) => named(btn(t, () => setMany({ labelX: x, labelY: y }), "chip-b"), name))),
       hint("Or drag it on the cover.")));
   }
   const rev = h("p", { class: "hint warn" });
@@ -432,8 +440,20 @@ function layoutPanel() {
 function buildPanel() {
   ctl.length = 0; panel.innerHTML = "";
   panelFor(tab).forEach(n => n && panel.append(n));
-  tabsEl.querySelectorAll("button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
+  // one tab in the Tab order (the open one); arrow keys move between them
+  tabsEl.querySelectorAll("[role=tab]").forEach(b => { const on = b.dataset.tab === tab; b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; });
+  panel.setAttribute("aria-labelledby", "dz-tab-" + tab);
   refreshVisibility(); positionSel();
+}
+/* ← → Home End on the style tabs: open the next / previous / first / last one and focus it. */
+function tabKeys(e) {
+  const list = [...tabsEl.querySelectorAll("[role=tab]")], i = list.indexOf(e.target);
+  if (i < 0) return;
+  const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: list.length - 1 }[e.key];
+  if (to == null || e.altKey || e.ctrlKey || e.metaKey) return;
+  e.preventDefault();
+  const b = list[(to + list.length) % list.length];
+  select(b.dataset.tab); b.focus();
 }
 function refreshVisibility() {
   for (const c of ctl) { if (c.show) c.el.hidden = !c.show(); if (c.update) c.update(); }
@@ -462,7 +482,42 @@ function place(div, b) {
   const r = canvas.getBoundingClientRect(), s = r.width / PREVIEW;
   Object.assign(div.style, { left: `${b.x * s - 4}px`, top: `${b.y * s - 4}px`, width: `${b.w * s + 8}px`, height: `${b.h * s + 8}px` }); div.hidden = false;
 }
-function positionSel() { if (!selBox) return; const k = SEL_FOR_TAB[tab]; place(selBox, k && boxes[k]); if (selBox.querySelector("span")) selBox.querySelector("span").textContent = TABS.find(t => t[0] === tab)[1]; }
+function positionSel() {
+  if (!selBox) return; const k = SEL_FOR_TAB[tab]; place(selBox, k && boxes[k]); if (selBox.querySelector("span")) selBox.querySelector("span").textContent = tabName(tab);
+  overlay.setAttribute("aria-label", k && boxes[k] ? `Cover editor: ${tabName(tab)} selected` : "Cover editor");
+}
+const tabName = (t) => TABS.find(x => x[0] === t)[1];
+
+/* ---------- the cover for screen readers and the keyboard ---------- */
+/* The parts of the cover that can be picked, in reading order: [hit-box key, tab]. */
+const PARTS = [["title", "title"], ["artist", "artist"], ["footer", "footer"], ["motif", "marks"], ["label", "label"], ["image", "picture"]];
+/* One or two plain sentences saying what the cover shows. */
+function describeCover() {
+  const one = (s) => String(s || "").replace(/\s*\n\s*/g, " ").trim();
+  const title = one(st.title), artist = one(st.artist), footer = one(st.footer);
+  const dark = SP.relLum(SP.hexToRgb(st.bg)) < SP.relLum(SP.hexToRgb(st.ink));
+  const bits = [];
+  bits.push(`Cover: ${title ? `“${title}”` : "no title"}${artist ? ` by ${artist}` : ""}, in ${st.font || "the title face"}`);
+  bits.push(`${dark ? "light" : "dark"} text on a ${dark ? "dark" : "light"} background${st.paletteName && st.paletteName !== "Custom" ? ` (${st.paletteName} colours)` : ""}`);
+  bits.push(image ? `with your picture (${st.imgMode === "bleed" ? "full bleed" : st.imgMode})` : "type only, no picture");
+  if (st.motifKind && st.motifKind !== "none") bits.push(`a row of ${st.motifKind} marks`);
+  if (st.shape && st.shape !== "none") bits.push(`a big ${st.shape} shape`);
+  if (st.pattern && st.pattern !== "none") bits.push(`a ${st.pattern} pattern`);
+  if (st.labelMark && st.labelMark !== "none" && (st.label || logo)) bits.push(st.labelMark === "logo" ? "the label's logo" : `the label mark ${one(st.label)}`);
+  if (st.barcode) bits.push("a barcode");
+  return bits.join(", ") + "." + (footer ? ` Footer: ${footer}.` : "");
+}
+/* Pick the next (+1) or previous (-1) part that is on the cover right now. */
+function stepPart(dir) {
+  const here = PARTS.filter(([k]) => boxes[k]);
+  if (!here.length) return;
+  const i = here.findIndex(([, t]) => t === tab);
+  const [, t] = here[i < 0 ? (dir > 0 ? 0 : here.length - 1) : (i + dir + here.length) % here.length];
+  select(t);
+  const words = t === "title" || t === "artist" || t === "footer";
+  announce(`${tabName(t)} selected. Arrow keys move it${words ? ", Enter retypes it" : ""}.`);
+}
+function announce(msg) { if (!liveEl) return; liveEl.textContent = ""; setTimeout(() => { liveEl.textContent = msg; }, 30); }
 
 function bindCanvas() {
   let drag = null;
@@ -508,8 +563,12 @@ function bindCanvas() {
   // keyboard nudges for the selected element
   overlay.tabIndex = 0;
   overlay.addEventListener("keydown", (e) => {
-    if (editor.contains(e.target)) return;
+    if (editor.contains(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+    // [ and ] pick the previous / next part of the cover; Enter (or F2) retypes the selected words in place
+    if (e.key === "]" || e.key === "[") { e.preventDefault(); stepPart(e.key === "]" ? 1 : -1); return; }
+    if ((e.key === "Enter" || e.key === "F2") && ["title", "artist", "footer"].includes(tab)) { e.preventDefault(); openEditor(tab); return; }
     const step = e.shiftKey ? 2 : 0.5, k = SEL_FOR_TAB[tab]; if (!k || !e.key.startsWith("Arrow")) return;
+    if (!boxes[k]) return;   // nothing of that kind on the cover to move
     e.preventDefault(); const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0, dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
     const map = { title: ["titleX", "titleDy"], artist: ["artistX", "artistY"], footer: ["footerX", "footerY"], motif: ["motifX", "motifY"], label: ["labelX", "labelY"], image: ["shiftX", "shiftY"] }[k];
     // the same limits as dragging, so a held arrow key can't push a piece off the sleeve
@@ -551,8 +610,12 @@ function showVariations() {
   const base = App.state(), q = App.queue();
   for (let i = 0; i < 8; i++) {
     const s = L.mutate(base, varBase * 100 + i, locks()), c = h("canvas", { width: 240, height: 240 });
-    grid.append(h("button", { type: "button", title: "Use this", onclick: () => { App.applyLook(SR.lookOf(s)); } }, c,
-      h("span", { class: "iconbtn dz-varflag", role: "button", title: "Flag for later", onclick: (e) => { e.stopPropagation(); const on = App.toggleFlag(SR.lookOf(s)); e.currentTarget.setAttribute("aria-pressed", String(on)); } }, "♥")));
+    // two buttons side by side (a button inside a button can't be reached from the keyboard)
+    const n = i + 1;
+    grid.append(h("div", { class: "dz-var" },
+      h("button", { type: "button", class: "dz-varuse", title: "Use this", "aria-label": `Use variation ${n}`, onclick: () => { App.applyLook(SR.lookOf(s)); } }, c),
+      h("button", { type: "button", class: "iconbtn dz-varflag", title: "Flag for later", "aria-label": `Flag variation ${n} for later`, "aria-pressed": String(App.isFlagged(SR.lookOf(s))),
+        onclick: (e) => { const on = App.toggleFlag(SR.lookOf(s)); e.currentTarget.setAttribute("aria-pressed", String(on)); } }, h("span", { "aria-hidden": "true" }, "♥"))));
     q(() => App.thumb(c, s));
   }
 }
@@ -593,17 +656,23 @@ function wordsPanel() {
 /* ---------- mount ---------- */
 function mount(root) {
   el = root; st = App.state(); tab = prefs.tab || "title";
-  const lockChips = h("div", { class: "chips dz-locks" }, h("span", { class: "legend" }, "Lock when shuffling:"));
+  const lockChips = h("div", { class: "chips dz-locks", role: "group", "aria-label": "Lock when shuffling" }, h("span", { class: "legend", "aria-hidden": "true" }, "Lock when shuffling:"));
   const names = { colour: "Colours", type: "Type", layout: "Layout", motif: "Marks", border: "Border", backdrop: "Backdrop", picture: "Picture" };
   L.GROUPS.forEach(g => lockChips.append(h("button", { type: "button", class: "chip-b", "aria-pressed": String(!!locks()[g]), title: `Shuffling leaves the ${names[g].toLowerCase()} alone`, onclick: (e) => {
     prefs.locks = { ...locks(), [g]: !locks()[g] }; savePrefs(); e.currentTarget.setAttribute("aria-pressed", String(!!prefs.locks[g])); } }, names[g])));
-  canvas = h("canvas", { width: PREVIEW, height: PREVIEW, "aria-label": "The sleeve. Click an element to edit it." });
+  // the picture is described in words (kept up to date as it changes); the layer over it is where the keyboard works
+  descEl = h("p", { class: "sr-only", id: "dz-cover-desc" });
+  liveEl = h("p", { class: "sr-only", "aria-live": "polite" });
+  const keysHelp = h("p", { class: "sr-only", id: "dz-cover-keys" },
+    "Square brackets pick the previous or next part of the cover. Arrow keys move the selected part, with Shift for bigger steps. Enter retypes the selected words.");
+  canvas = h("canvas", { width: PREVIEW, height: PREVIEW, role: "img", "aria-labelledby": "dz-cover-desc" });
   hoverBox = h("div", { class: "dz-hover", hidden: true });
-  selBox = h("div", { class: "dz-sel", hidden: true }, h("span"));
+  selBox = h("div", { class: "dz-sel", hidden: true, "aria-hidden": "true" }, h("span"));
   editor = h("div", { class: "dz-editor", hidden: true });
-  overlay = h("div", { class: "dz-overlay" }, hoverBox, selBox, editor);
-  tabsEl = h("div", { class: "dz-tabs", role: "tablist" }, ...TABS.map(([k, t]) => h("button", { type: "button", role: "tab", "data-tab": k, onclick: () => select(k) }, t)));
-  panel = h("div", { class: "dz-panel", role: "tabpanel" });
+  overlay = h("div", { class: "dz-overlay", role: "application", "aria-roledescription": "cover editor", "aria-label": "Cover editor", "aria-describedby": "dz-cover-desc dz-cover-keys" }, hoverBox, selBox, editor);
+  tabsEl = h("div", { class: "dz-tabs", role: "tablist", "aria-labelledby": "dz-style-label", onkeydown: tabKeys },
+    ...TABS.map(([k, t]) => h("button", { type: "button", role: "tab", id: "dz-tab-" + k, "aria-controls": "dz-panel", "data-tab": k, tabindex: "-1", onclick: () => select(k) }, t)));
+  panel = h("div", { class: "dz-panel", role: "tabpanel", id: "dz-panel" });
   const sizeSel = h("select", { "aria-label": "Download size", onchange: (e) => set("exportSize", e.target.value) }, ...["3000", "2000", "1400"].map(v => h("option", { value: v }, `${v} px`)));
   const fmtSel = h("select", { "aria-label": "File type", onchange: (e) => { prefs.fmt = e.target.value; savePrefs(); } },
     h("option", { value: "jpg" }, "JPG (small file)"), h("option", { value: "png" }, "PNG (lossless, large)"));
@@ -614,16 +683,16 @@ function mount(root) {
       h("div", { class: "dz-stage" },
         h("div", { class: "dz-tools" },
           h("button", { type: "button", class: "btn primary", title: "A new look for these words (keeps what you've locked)", onclick: () => shuffle() }, "Shuffle"),
-          h("div", { class: "dz-seed" }, btn("‹", () => shuffle((SP.get().sleeve.lookSeed || 2) - 1)), h("span", {}, "#", h("b", {}, "—")), btn("›", () => shuffle())),
-          btn("Variations", () => { varBase++; showVariations(); }),
+          h("div", { class: "dz-seed" }, named(btn("‹", () => shuffle((SP.get().sleeve.lookSeed || 2) - 1)), "Previous shuffle"), h("span", {}, "#", h("b", {}, "—")), named(btn("›", () => shuffle()), "Next shuffle")),
+          Object.assign(btn("Variations", () => { varBase++; showVariations(); }), { className: "btn small dz-varbtn" }),
           btn("♥ Flag this look", (e) => { const on = App.toggleFlag(SR.lookOf(App.state())); e.currentTarget.textContent = on ? "♥ Flagged" : "♥ Flag this look"; }),
           lockChips),
-        h("div", { class: "dz-vars", hidden: true }, h("div", { class: "dz-varhead" }, h("span", { class: "legend" }, "Variations on this look: click one to use it"), btn("More", () => { varBase++; showVariations(); }), btn("Close", () => { el.querySelector(".dz-vars").hidden = true; })), h("div", { class: "dz-vargrid" })),
-        h("div", { class: "dz-sleeve" }, canvas, overlay),
+        h("div", { class: "dz-vars", hidden: true }, h("div", { class: "dz-varhead" }, h("span", { class: "legend" }, "Variations on this look: click one to use it"), btn("More", () => { varBase++; showVariations(); }), btn("Close", () => { el.querySelector(".dz-vars").hidden = true; el.querySelector(".dz-varbtn").focus(); })), h("div", { class: "dz-vargrid" })),
+        h("div", { class: "dz-sleeve" }, canvas, overlay, descEl, keysHelp, liveEl),
         h("div", { class: "dz-foot" },
-          h("span", { class: "hint" }, "Click anything to edit it · drag to move · double-click words to retype · arrows nudge"),
+          h("span", { class: "hint" }, "Click anything to edit it · drag to move · double-click words to retype · keys: [ ] pick, arrows nudge, Enter retypes"),
           h("div", { class: "dz-dl" }, h("output", { class: "dz-file" }), sizeSel, fmtSel, h("button", { type: "button", class: "btn small primary", onclick: download }, "Download cover")))),
-      h("aside", { class: "dz-side" }, wordsPanel(), h("p", { class: "dz-label" }, "Style"), tabsEl, panel)));
+      h("div", { class: "dz-side", role: "region", "aria-label": "Edit the cover" }, wordsPanel(), h("p", { class: "dz-label", id: "dz-style-label" }, "Style"), tabsEl, panel)));
   sizeSel.value = st.exportSize || "3000";
 
   bindCanvas();

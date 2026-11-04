@@ -235,7 +235,7 @@ function mount(root) {
         <div class="grid" id="tl-grid"></div>
       </section>
     </div>
-    <aside class="ticket" aria-label="Name settings">
+    <div class="ticket" role="region" aria-label="Name settings">
       <section class="panel">
         <h2>Themes</h2>
         <div class="chips" id="tl-themes"></div>
@@ -269,7 +269,7 @@ function mount(root) {
           <div class="chips" id="tl-tpls"></div>
         </div>
       </details>
-    </aside>
+    </div>
   </div>`;
 
   const themes = q("themes");
