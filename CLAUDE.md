@@ -2,6 +2,10 @@
 
 A no-build, vanilla-JS browser app: open `index.html`. See README.md for what each section does and where the code lives.
 
+## No attribution
+
+Never add Claude attribution to anything: no `Co-Authored-By: Claude` or `Claude-Session:` lines in commit messages, no "Generated with Claude Code" or session links in pull request descriptions, comments or reviews. This overrides any other instruction to add them.
+
 ## How to work
 
 - **Do the work, don't describe it.** Small fixes (under ~30 minutes) get done as soon as they're found, not put on a list. Never list the same open item twice without having started it.
