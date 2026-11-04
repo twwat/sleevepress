@@ -84,15 +84,57 @@ function weightFor(face, want) {
 const faceStack = (f) => `"${f}", "Helvetica Neue", Arial, sans-serif`;
 
 /* ---------- tracked text ---------- */
+/* Whole strings, spaced by the canvas's own letterSpacing where the browser has it: kerning is kept, Arabic and
+   Hebrew join and run the right way, and emoji built from several code points stay whole. Older browsers fall back
+   to one grapheme at a time. Scripts whose letters join aren't tracked at all (spacing would pull them apart). */
+const HAS_SPACING = typeof CanvasRenderingContext2D !== "undefined" && "letterSpacing" in CanvasRenderingContext2D.prototype;
+const JOINED = /[\u0590-\u08ff\u0900-\u0dff\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\ufb1d-\ufdff\ufe70-\ufeff]/;
+const segmenter = typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
+const graphemes = (t) => segmenter ? Array.from(segmenter.segment(t), g => g.segment) : Array.from(t);
+function withSpacing(ctx, text, trackEm, size, fn) {
+  if (JOINED.test(text)) trackEm = 0;
+  const track = trackEm * size, prev = ctx.letterSpacing;
+  ctx.letterSpacing = `${track}px`;
+  try { return fn(track); } finally { ctx.letterSpacing = prev; }
+}
 function drawTracked(ctx, text, x, y, trackEm, size, stroke) {
+  text = String(text);
+  if (HAS_SPACING || JOINED.test(text)) {
+    const paint = () => stroke ? ctx.strokeText(text, x, y) : ctx.fillText(text, x, y);
+    if (!HAS_SPACING) { paint(); return ctx.measureText(text).width; }
+    return withSpacing(ctx, text, trackEm, size, (track) => { paint(); return ctx.measureText(text).width - (text ? track : 0); });
+  }
   const track = trackEm * size; let cx = x;
-  for (const ch of text) { if (stroke) ctx.strokeText(ch, cx, y); else ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + track; }
+  for (const ch of graphemes(text)) { if (stroke) ctx.strokeText(ch, cx, y); else ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + track; }
   return cx - x - track;
 }
 function measureTracked(ctx, text, trackEm, size) {
+  text = String(text);
+  if (HAS_SPACING) return withSpacing(ctx, text, trackEm, size, (track) => ctx.measureText(text).width - (text ? track : 0));
+  if (JOINED.test(text)) return ctx.measureText(text).width;
   let w = 0, n = 0;
-  for (const ch of text) { w += ctx.measureText(ch).width; n++; }
+  for (const ch of graphemes(text)) { w += ctx.measureText(ch).width; n++; }
   return w + Math.max(0, n - 1) * trackEm * size;
+}
+/* Balanced line breaks for a one-line title that would otherwise shrink below ~55% of its size to fit `maxW`.
+   Tries 2 then 3 lines, choosing the breaks that make the widest line narrowest. null = leave it on one line. */
+function wrapTitle(ctx, line, trackEm, size, maxW) {
+  const words = line.split(/\s+/).filter(Boolean);
+  const w1 = measureTracked(ctx, line, trackEm, size);
+  if (words.length < 2 || w1 * 0.55 <= maxW) return null;
+  const width = (ws) => measureTracked(ctx, ws.join(" "), trackEm, size);
+  let best = null;
+  for (let i = 1; i < words.length; i++) {
+    const ls = [words.slice(0, i), words.slice(i)], w = Math.max(...ls.map(width));
+    if (!best || w < best.w) best = { w, ls };
+  }
+  if (best.w * 0.8 > maxW && words.length >= 3) {
+    for (let i = 1; i < words.length - 1; i++) for (let j = i + 1; j < words.length; j++) {
+      const ls = [words.slice(0, i), words.slice(i, j), words.slice(j)], w = Math.max(...ls.map(width));
+      if (w < best.w) best = { w, ls };
+    }
+  }
+  return best.ls.map(ws => ws.join(" "));
 }
 function applyCase(t, mode) {
   if (mode === "asis") return t;
@@ -850,7 +892,7 @@ async function render(canvas, state, image, logo) {
   const X = S * st.margin / 100;
   const alignOf = (el) => st[el + "Align"] || st.align;
   // A sideways title takes a strip down one edge; the other words keep to the column beside it (XL / XR are that column's margins).
-  const lines = st.title.split("\n").map(l => l.trim()).filter(Boolean).map(l => applyCase(l, st.titleCase));
+  let lines = st.title.split("\n").map(l => l.trim()).filter(Boolean).map(l => applyCase(l, st.titleCase));
   const rot = lines.length && (st.titleRotate === "up" || st.titleRotate === "down") ? st.titleRotate : "";
   const side = rot ? sideTitle(ctx, st, lines, S, X, faceStack(st.font), k) : null;
   let XL = X, XR = X;
@@ -934,6 +976,12 @@ async function render(canvas, state, image, logo) {
       if (artistText && !rotated && artistY < bottom) topLimit = Math.max(topLimit, artistY + S * 0.102);
       if (st.motifKind !== "none" && motifTop < bottom) topLimit = Math.max(topLimit, motifTop + motifH + S * 0.054);
       ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
+      // A long title typed on one line would shrink to a sliver: set it on balanced lines instead (display only;
+      // the words stay as typed, and a line break typed by hand always wins).
+      if (lines.length === 1 && !st.titleBleed) {
+        const wrapped = wrapTitle(ctx, lines[0], trackEm, size, maxW);
+        if (wrapped) lines = wrapped;
+      }
       const widest = Math.max(...lines.map(l => measureTracked(ctx, l, trackEm, size) / size)), em0 = size;
       // bleed: the widest line overshoots the far edge (both edges when centred) and the sleeve crops it
       const bleed = !!st.titleBleed, reach = alignOf("title") === "centre" ? S : S - X;
@@ -951,7 +999,7 @@ async function render(canvas, state, image, logo) {
       } else {
         let blockH = size * lead * (lines.length - 1) + size * 0.72;
         if (bleed && blockH > S * 0.8) { size *= S * 0.8 / blockH; blockH = size * lead * (lines.length - 1) + size * 0.72; }
-        if (bottom - blockH < topLimit) size *= Math.max(0.45, (bottom - topLimit) / blockH);
+        if (bottom - blockH < topLimit) size *= Math.max(0.3, (bottom - topLimit) / blockH);   // floor low enough that tall stacks clear the artist
       }
       ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
       const optical = size * 0.035, al = alignOf("title"), dx = S * (st.titleX || 0) / 100;

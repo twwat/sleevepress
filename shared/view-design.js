@@ -512,7 +512,11 @@ function bindCanvas() {
     const step = e.shiftKey ? 2 : 0.5, k = SEL_FOR_TAB[tab]; if (!k || !e.key.startsWith("Arrow")) return;
     e.preventDefault(); const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0, dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
     const map = { title: ["titleX", "titleDy"], artist: ["artistX", "artistY"], footer: ["footerX", "footerY"], motif: ["motifX", "motifY"], label: ["labelX", "labelY"], image: ["shiftX", "shiftY"] }[k];
-    setMany({ [map[0]]: st[map[0]] + dx, [map[1]]: st[map[1]] + dy });
+    // the same limits as dragging, so a held arrow key can't push a piece off the sleeve
+    const lim = { titleX: [-40, 40], titleDy: [-45, 30], artistX: [-45, 45], artistY: [3, 97], footerX: [-45, 45], footerY: [3, 98], motifX: [-45, 45], motifY: [3, 97],
+      labelX: [2, 98], labelY: [2, 98], shiftX: [-150, 150], shiftY: [-150, 150] };
+    const fit = (key, v) => Math.max(lim[key][0], Math.min(lim[key][1], v));
+    setMany({ [map[0]]: fit(map[0], (st[map[0]] || 0) + dx), [map[1]]: fit(map[1], (st[map[1]] || 0) + dy) });
   });
 }
 /* Retype words right on the cover. */
@@ -525,9 +529,10 @@ function openEditor(k) {
     fontSize: `${Math.max(14, Math.min(40, (multi ? b.h / Math.max(1, st.title.split("\n").length) : b.h) * s * 0.7))}px` });
   editor.innerHTML = ""; editor.append(ta); editor.hidden = false; ta.focus(); ta.select();
   ta.addEventListener("input", () => set(k, multi ? ta.value : ta.value.replace(/\n/g, " ")));
-  const close = () => { editor.hidden = true; editor.innerHTML = ""; overlay.focus(); };
-  ta.addEventListener("keydown", (e) => { if (e.key === "Escape" || (e.key === "Enter" && (!multi || e.ctrlKey || e.metaKey))) { e.preventDefault(); close(); } });
-  ta.addEventListener("blur", () => setTimeout(close, 60));
+  // Back to the cover only when the editor is closed from the keyboard; clicking elsewhere keeps that focus.
+  const close = (refocus) => { if (editor.hidden) return; editor.hidden = true; editor.innerHTML = ""; if (refocus) overlay.focus(); };
+  ta.addEventListener("keydown", (e) => { if (e.key === "Escape" || (e.key === "Enter" && (!multi || e.ctrlKey || e.metaKey))) { e.preventDefault(); close(true); } });
+  ta.addEventListener("blur", () => setTimeout(() => close(false), 60));
   select(k);
 }
 
@@ -567,7 +572,7 @@ function wordsPanel() {
     const sz = h("input", { type: "range", min: 40, max: 160, step: 1, "aria-label": "Title size" }), out = h("output");
     sz.addEventListener("input", () => { out.textContent = sz.value + "%"; set("titleSize", +sz.value); });
     inputs._size = sz; inputs._sizeOut = out;
-    const note = h("p", { class: "hint warn dz-fitnote", hidden: true }, "That's as big as the title fits across the sleeve. For bigger letters, put it on more lines (press Enter in the title).");
+    const note = h("p", { class: "hint warn dz-fitnote", hidden: true }, "That's as big as the title fits across the sleeve. A long title is split onto lines for you; to choose where it breaks, press Enter in the title.");
     inputs._note = note;
     return h("div", { class: "wide dz-titlebox" }, lab, h("label", { class: "f" }, h("span", {}, "Title size", out), sz), note);
   }));

@@ -76,15 +76,20 @@ function renderCard(card) {
   const g = gen;
   enqueue(async () => {
     if (g !== gen || !card.isConnected || card._ver === ver || !visible) return;
+    // Scrolled well past while it waited: skip it, and watch it again so it renders if it comes back. Without this a
+    // fast scroll leaves the cards on screen blank behind a queue of ones nobody is looking at.
+    const r = card.getBoundingClientRect();
+    if (r.bottom < -1200 || r.top > innerHeight + 1200) { if (lazy) lazy.watch(card); return; }
     Looks.picture = !!(await SP.cover.image());   // the randomizer needs to know before it rolls
     const v = ver, st = stateFor(card);
     card._look = card._recipe.kind === "flag" ? card._recipe.look : SR.lookOf(st);   // a flagged card stays that flag
     await App.thumb(work, st);
     if (g !== gen || !card.isConnected) return;
-    const blob = await new Promise(res => work.toBlob(res, "image/jpeg", 0.86));
-    if (!blob || g !== gen || !card.isConnected) return;
-    if (card._url) URL.revokeObjectURL(card._url);
-    card._url = URL.createObjectURL(blob); card._img.src = card._url; card._ver = v;
+    // Encoded right away. toBlob would be quicker on paper, but Chrome runs it in idle time, and while the page is busy
+    // (scrolling, other cards decoding) each card waited about a second: they filled faster with the window in the background.
+    const url = work.toDataURL("image/jpeg", 0.86);
+    if (g !== gen || !card.isConnected) return;
+    card._img.src = url; card._ver = v;
     card._img.alt = `${st.font} on ${st.paletteName || "colours"}`;
     card._heart.setAttribute("aria-pressed", String(App.isFlagged(card._look)));
     card.classList.remove("loading", "stale");
@@ -100,7 +105,6 @@ function watchAll() {
 
 function clearGrid() {
   gen++;
-  cards.forEach(c => { if (c._url) URL.revokeObjectURL(c._url); });
   cards.clear(); grid.textContent = ""; count = 0;
   if (lazy && lazy.stop) lazy.stop();
   lazy = App.lazy(renderCard, "700px");

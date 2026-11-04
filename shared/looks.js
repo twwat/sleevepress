@@ -457,6 +457,7 @@ function randomize(state, seed, locks = {}, opts = {}) {
     s.grain = between(8, 55); s.vignette = between(15, 75);
   }
   repair(s, hard, rnd, pick, between, chance, locks);
+  readableFooter(s);
   return s;
 }
 
@@ -464,6 +465,17 @@ function randomize(state, seed, locks = {}, opts = {}) {
 /* Presets as dealt: the familiar ones a little more often than the special ones. */
 const LAYOUT_DECK = deck([["classic", 2], ["centred", 2], ["right", 1], ["poster", 2], ["quiet", 1], ["flipped", 1], ["stacked", 1],
   ["giant", 1], ["corner", 1], ["spine", 1], ["lowband", 1], ["topheavy", 1]]);
+/* The footer is small and drawn see-through, so the palette check on full-strength ink isn't enough: raise its
+   opacity until it reads at 4.5:1 against the ground (3:1 at the least, falling back from accent to ink). */
+function readableFooter(s) {
+  const bg = hexToRgb(s.bg); if (!bg) return;
+  const at = (col, op) => { const c = hexToRgb(col) || [255, 255, 255]; return SP.contrast(c.map((v, i) => v * op / 100 + bg[i] * (1 - op / 100)), bg); };
+  if (s.footerColor === "accent" && at(s.accent, 100) < 3) s.footerColor = "ink";
+  const col = s.footerColor === "accent" ? s.accent : s.ink;
+  let op = s.footerOpacity ?? 58;
+  while (op < 100 && at(col, op) < 4.5) op = Math.min(100, op + 5);
+  s.footerOpacity = op;
+}
 function layout(s, rnd, pick, between, chance, dealt) {
   s.titleAlign = s.artistAlign = s.footerAlign = s.motifAlign = ""; s.titleX = s.artistX = s.footerX = s.motifX = 0;
   s.titleBleed = false; s.titleRotate = "none";

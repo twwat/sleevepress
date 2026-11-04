@@ -4,6 +4,28 @@
 "use strict";
 const PT = 72 / 25.4;
 
+/* PDF string text in Helvetica's WinAnsi encoding, written as octal escapes so the content stream stays ASCII.
+   Covers Western European letters, ·, –, —, curly quotes, € and ™. Anything else loses its accents (Ł stays "-"). */
+const WIN_EXTRA = { 0x20ac: 0x80, 0x201a: 0x82, 0x0192: 0x83, 0x201e: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x02c6: 0x88, 0x2030: 0x89,
+  0x0160: 0x8a, 0x2039: 0x8b, 0x0152: 0x8c, 0x017d: 0x8e, 0x2018: 0x91, 0x2019: 0x92, 0x201c: 0x93, 0x201d: 0x94, 0x2022: 0x95, 0x2013: 0x96,
+  0x2014: 0x97, 0x02dc: 0x98, 0x2122: 0x99, 0x0161: 0x9a, 0x203a: 0x9b, 0x0153: 0x9c, 0x017e: 0x9e, 0x0178: 0x9f };
+function winByte(ch) {
+  const c = ch.codePointAt(0);
+  if (c >= 0x20 && c <= 0x7e) return c;
+  if (c >= 0xa0 && c <= 0xff) return c;
+  if (WIN_EXTRA[c]) return WIN_EXTRA[c];
+  return null;
+}
+function winAnsi(s) {
+  let out = "";
+  for (const ch of String(s)) {
+    let b = winByte(ch);
+    if (b == null) { const base = ch.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); b = base.length === 1 ? winByte(base) : null; }
+    if (b == null) b = 0x2d;   // "-"
+    out += b === 0x28 || b === 0x29 || b === 0x5c ? "\\" + String.fromCharCode(b) : b < 0x80 ? String.fromCharCode(b) : "\\" + b.toString(8).padStart(3, "0");
+  }
+  return out;
+}
 function dataUrlBytes(u) { const b = atob(u.split(",")[1]); const a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
 const n2 = (v) => (Math.round(v * 1000) / 1000).toString();
 
@@ -35,7 +57,7 @@ function doc() {
         rect(x, y, w, h, o) { ops.push(`q ${stroke(o)} ${n2(x * PT)} ${n2(H - (y + h) * PT)} ${n2(w * PT)} ${n2(h * PT)} re S Q`); return p; },
         circle(cx, cy, r, o = {}) { ops.push(`q ${stroke(o)} ${o.fill != null ? `${o.fill} g ` : ""}${circlePath(cx, cy, r)} ${o.fill != null ? (o.strokeToo ? "B" : "f") : "S"} Q`); return p; },
         text(s, x, y, size = 7, gray = 0.4) {
-          const t = String(s).replace(/[^\x20-\x7e]/g, "-").replace(/([\\()])/g, "\\$1");
+          const t = winAnsi(s);
           ops.push(`BT /F1 ${n2(size)} Tf ${gray} g ${P(x, y)} Td (${t}) Tj ET`); return p;
         },
         /* crop marks just outside a trimmed box */
@@ -58,7 +80,7 @@ function doc() {
       const imgBase = 4, pageBase = imgBase + images.length;
       obj(1, () => push("<< /Type /Catalog /Pages 2 0 R >>"));
       obj(2, () => push(`<< /Type /Pages /Count ${pages.length} /Kids [${pages.map((_, i) => `${pageBase + i * 2} 0 R`).join(" ")}] >>`));
-      obj(3, () => push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"));
+      obj(3, () => push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"));
       images.forEach((im, i) => obj(imgBase + i, () => {
         push(`<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bytes.length} >>\nstream\n`);
         push(im.bytes); push("\nendstream");
