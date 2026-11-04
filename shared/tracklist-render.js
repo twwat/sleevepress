@@ -276,6 +276,7 @@ async function render(canvas, db, image) {
       });
     });
   }
+  SR.trimScratch();
 }
 
 /* ---------- plain-text exports ---------- */

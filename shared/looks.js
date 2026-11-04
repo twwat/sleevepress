@@ -453,10 +453,13 @@ function randomize(state, seed, locks = {}, opts = {}) {
       if (bold) { s.patternArea = bold.area; s.patternPos = bold.pos; s.patternAmt = between(70, 100); s.patternScale = between(80, 170, 5); }
       else if (scheme === "bold") { s.patternArea = "edge"; s.patternAmt = between(60, 90); }   // no free side: a strong pattern border instead
     }
-    s.texture = chance(0.3) ? pick(["halftone", "lines", "grid"]) : "none"; s.textureAmt = between(25, 75);
+    // a surface: printed on cloth (linen, canvas, denim), a worn halftone, or the old screens
+    s.texture = chance(0.3) ? pick(["halftone", "lines", "grid", "linen", "linen", "canvas", "denim", "distress"]) : "none";
+    s.textureAmt = between(25, 75);
     s.grain = between(8, 55); s.vignette = between(15, 75);
   }
   repair(s, hard, rnd, pick, between, chance, locks);
+  readableFooter(s);
   return s;
 }
 
@@ -464,6 +467,17 @@ function randomize(state, seed, locks = {}, opts = {}) {
 /* Presets as dealt: the familiar ones a little more often than the special ones. */
 const LAYOUT_DECK = deck([["classic", 2], ["centred", 2], ["right", 1], ["poster", 2], ["quiet", 1], ["flipped", 1], ["stacked", 1],
   ["giant", 1], ["corner", 1], ["spine", 1], ["lowband", 1], ["topheavy", 1]]);
+/* The footer is small and drawn see-through, so the palette check on full-strength ink isn't enough: raise its
+   opacity until it reads at 4.5:1 against the ground (3:1 at the least, falling back from accent to ink). */
+function readableFooter(s) {
+  const bg = hexToRgb(s.bg); if (!bg) return;
+  const at = (col, op) => { const c = hexToRgb(col) || [255, 255, 255]; return SP.contrast(c.map((v, i) => v * op / 100 + bg[i] * (1 - op / 100)), bg); };
+  if (s.footerColor === "accent" && at(s.accent, 100) < 3) s.footerColor = "ink";
+  const col = s.footerColor === "accent" ? s.accent : s.ink;
+  let op = s.footerOpacity ?? 58;
+  while (op < 100 && at(col, op) < 4.5) op = Math.min(100, op + 5);
+  s.footerOpacity = op;
+}
 function layout(s, rnd, pick, between, chance, dealt) {
   s.titleAlign = s.artistAlign = s.footerAlign = s.motifAlign = ""; s.titleX = s.artistX = s.footerX = s.motifX = 0;
   s.titleBleed = false; s.titleRotate = "none";
@@ -798,9 +812,14 @@ function mutate(state, seed, locks = {}, opts = {}) {
 }
 
 // Every face the renderers can use, loaded once per page.
+// `fontsCSS` settles once the stylesheet has arrived (or failed, or 5 s passed): until then the faces aren't declared,
+// and document.fonts.load() would resolve straight away with nothing loaded.
+let fontsCSS = Promise.resolve();
 if (!document.querySelector("link[data-looks-fonts]")) {
-  const l = document.createElement("link"); l.rel = "stylesheet"; l.href = GOOGLE_CSS; l.dataset.looksFonts = "1"; document.head.appendChild(l);
+  const l = document.createElement("link"); l.rel = "stylesheet"; l.href = GOOGLE_CSS; l.dataset.looksFonts = "1";
+  fontsCSS = new Promise(res => { l.onload = l.onerror = () => res(); setTimeout(res, 5000); });
+  document.head.appendChild(l);
 }
 
-window.Looks = { dealer, patternRect, GROUP_KEYS, keepMine, PALETTES, FONTS, FONT, BODY_FONTS, GOOGLE_CSS, LAYOUTS, LAYOUT_KEYS, FRAME_STYLES, MOTIFS, MOODS, FEELS, GROUPS, moodsOf, makePalette, randomize, mutate };
+window.Looks = { fontsCSS, dealer, patternRect, GROUP_KEYS, keepMine, PALETTES, FONTS, FONT, BODY_FONTS, GOOGLE_CSS, LAYOUTS, LAYOUT_KEYS, FRAME_STYLES, MOTIFS, MOODS, FEELS, GROUPS, moodsOf, makePalette, randomize, mutate };
 })();

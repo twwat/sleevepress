@@ -23,6 +23,7 @@ function undo() { if (!past.length) return; future.push(SP.clone(SP.get())); res
 function redo() { if (!future.length) return; past.push(SP.clone(SP.get())); restore(future.pop()); lastPush = 0; updateUndo(); }
 function clearHistory() { past.length = 0; future.length = 0; lastPush = 0; updateUndo(); }
 SP.onSwitch(clearHistory);
+SP.onBeforeEdit(() => checkpoint());   // tracklist, print settings, promo words: undoable like edits on the cover
 const undoFns = new Set();
 function updateUndo() { undoFns.forEach(fn => fn(past.length, future.length)); }
 
@@ -87,12 +88,22 @@ async function thumb(canvasOrSize, st) {
 async function env() { return Makers.env(SP.get(), await SP.cover.image(), await SP.logo.image()); }
 
 /* ---------- saving ---------- */
-async function saveToLibrary(asNew) {
-  const c = await thumb(320);
-  const id = await SP.library.save(c.toDataURL("image/jpeg", 0.82), asNew); markSaved();
-  SP.toast(asNew ? "Saved as a new release in your library" : "Saved to your library");
-  return id;
+/* One save at a time: a second Ctrl+S while one is running gets the same result instead of a duplicate entry.
+   Resolves to the library id, or null if the browser wouldn't store it (the user is told, nothing is marked saved). */
+let saving = null;
+function saveToLibrary(asNew) {
+  if (saving) return saving;
+  saving = (async () => {
+    const c = await thumb(320);
+    const id = await SP.library.save(c.toDataURL("image/jpeg", 0.82), asNew);
+    if (!id) { SP.toast("Couldn't save: this browser's storage is full or blocked. Use ⚙ → Back up everything to keep a copy."); return null; }
+    markSaved();
+    SP.toast(asNew ? "Saved as a new release in your library" : "Saved to your library");
+    return id;
+  })().finally(() => { saving = null; });
+  return saving;
 }
+const openedToast = (r, name) => SP.toast(r === "nopicture" ? "Opened, but its picture couldn't be read" : name ? `Opened ${name}` : "Opened");
 /* Starts the next release in a series: same look and label, next catalogue number, words cleared. */
 function nextRelease() {
   clearHistory();
@@ -125,52 +136,106 @@ function route() {
   document.querySelectorAll("[data-go]").forEach(a => a.setAttribute("aria-current", a.dataset.go === navKey ? "page" : "false"));
   filesSwitch(v);
   document.body.dataset.view = v;
+  document.title = `${d.label} · Sleeve Press`;
   if (d.show) d.show();
   window.scrollTo(0, 0);
 }
 
 /* ---------- dialogs and menus ---------- */
-/* A modal: title, body (node or nodes), actions [{ label, primary, danger, onclick → false keeps it open }]. Esc / backdrop close it. */
+/* Everything Tab can reach inside `root`, in order. */
+const FOCUSABLE = "a[href], button, input:not([type=hidden]), textarea, select, summary, [tabindex], [contenteditable=true]";
+function focusables(root) {
+  return [...root.querySelectorAll(FOCUSABLE)].filter(x => !x.disabled && x.tabIndex >= 0 && !x.closest("[inert]") && x.getClientRects().length);
+}
+/* Open dialogs, newest last. Only the top one answers Esc and Tab. */
+const dialogs = [];
+let dlgN = 0;
+/* A modal: title, body (node or nodes), actions [{ label, primary, danger, onclick → false keeps it open }]. Esc / backdrop close it.
+   Focus stays inside it while it's open (the page behind is inert) and goes back where it was when it closes. */
 function modal({ title, body, actions = [], wide, onClose }) {
-  const close = () => { if (!wrap.isConnected) return; if (onClose) onClose(); wrap.remove(); document.removeEventListener("keydown", esc); if (last && last.focus) last.focus(); };
-  const esc = (e) => {
-    if (e.key === "Escape") close();
+  const close = () => {
+    if (!wrap.isConnected) return;
+    if (onClose) onClose();
+    wrap.remove(); document.removeEventListener("keydown", keys, true);
+    const i = dialogs.indexOf(wrap); if (i >= 0) dialogs.splice(i, 1);
+    madeInert.forEach(n => { n.inert = false; });
+    // back to whatever opened it; if that's gone (a menu, a rebuilt panel), to the top of the current section
+    const back = last && last.isConnected && !last.closest("[inert]") ? last : document.querySelector(".view:not([hidden])");
+    if (back && back.focus) { if (back.classList.contains("view")) back.tabIndex = -1; back.focus({ preventScroll: true }); }
+  };
+  const keys = (e) => {
+    if (dialogs[dialogs.length - 1] !== wrap) return;   // a dialog opened on top of this one handles its own keys
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); return; }
     if (e.key === "Tab") {   // keep focus inside the dialog
-      const f = [...box.querySelectorAll("button, input, textarea, select, [href], label.file-drop")].filter(x => !x.disabled && x.offsetParent !== null);
-      if (!f.length) return; const first = f[0], last2 = f[f.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last2.focus(); }
-      else if (!e.shiftKey && document.activeElement === last2) { e.preventDefault(); first.focus(); }
-      else if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+      const f = focusables(box);
+      if (!f.length) { e.preventDefault(); return; }
+      const first = f[0], end = f[f.length - 1], a = document.activeElement;
+      if (!box.contains(a)) { e.preventDefault(); (e.shiftKey ? end : first).focus(); }
+      else if (e.shiftKey && a === first) { e.preventDefault(); end.focus(); }
+      else if (!e.shiftKey && a === end) { e.preventDefault(); first.focus(); }
     }
   };
-  const last = document.activeElement;
-  const box = h("div", { class: "dlg" + (wide ? " wide" : ""), role: "dialog", "aria-modal": "true", "aria-label": title },
-    h("h2", {}, title), h("div", { class: "dlg-body" }, body),
+  const last = document.activeElement, id = "dlg-t" + (++dlgN);
+  const box = h("div", { class: "dlg" + (wide ? " wide" : ""), role: "dialog", "aria-modal": "true", "aria-labelledby": id },
+    h("h2", { id }, title), h("div", { class: "dlg-body" }, body),
     h("div", { class: "dlg-actions" }, ...actions.map(a => h("button", { type: "button", class: "btn" + (a.primary ? " primary" : "") + (a.danger ? " danger" : ""),
       onclick: async () => { const keep = a.onclick && (await a.onclick()) === false; if (!keep) close(); } }, a.label))));
   const wrap = h("div", { class: "dlg-wrap", onmousedown: (e) => { if (e.target === wrap) close(); } }, box);
-  document.body.append(wrap); document.addEventListener("keydown", esc);
-  const f = box.querySelector("input, textarea, button.primary, button"); if (f) f.focus();
+  // the page behind can't be clicked, tabbed to or read while this is open (the toast stays live)
+  const madeInert = [...document.body.children].filter(n => n.id !== "toast" && n.tagName !== "SCRIPT" && !n.inert);
+  madeInert.forEach(n => { n.inert = true; });
+  document.body.append(wrap); dialogs.push(wrap); document.addEventListener("keydown", keys, true);
+  const f = box.querySelector("input:not([type=file]), textarea, button.primary, button"); if (f) f.focus();
   return { close, box };
 }
-/* A drop-down menu under a button. items: [{ label, sub, onclick } | "-"] or a function returning them. */
+/* A drop-down menu under a button. items: [{ label, sub, onclick } | "-"] or a function returning them.
+   Keyboard: Enter, Space or ↓ opens it on the first item (↑ on the last); ↑ ↓ Home End move; a letter jumps to the next item
+   starting with it; Esc closes it and goes back to the button; Tab closes it and moves on from the button. */
+let menuN = 0;
 function menu(button, items) {
   let open = null;
-  const shut = () => { if (open) { open.remove(); open = null; button.setAttribute("aria-expanded", "false"); document.removeEventListener("mousedown", away); document.removeEventListener("keydown", key); } };
+  const id = "menu" + (++menuN);
+  if (!button.id) button.id = id + "-btn";
+  const shut = () => {
+    if (!open) return;
+    open.remove(); open = null; button.setAttribute("aria-expanded", "false");
+    document.removeEventListener("mousedown", away); document.removeEventListener("keydown", key, true); window.removeEventListener("resize", shut);
+  };
   const away = (e) => { if (open && !open.contains(e.target) && e.target !== button && !button.contains(e.target)) shut(); };
-  const key = (e) => { if (e.key === "Escape") { shut(); button.focus(); } };
-  button.setAttribute("aria-haspopup", "menu"); button.setAttribute("aria-expanded", "false");
-  button.addEventListener("click", async () => {
-    if (open) return shut();
+  const entries = () => open ? [...open.querySelectorAll("[role=menuitem]")] : [];
+  const move = (to) => { const l = entries(); if (!l.length) return; const i = (to + l.length) % l.length; l[i].focus(); };
+  const key = (e) => {
+    if (!open) return;
+    const l = entries(), i = l.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); shut(); button.focus(); }
+    else if (e.key === "Tab") { shut(); button.focus(); }   // no preventDefault: the browser then moves on from the button
+    else if (e.key === "ArrowDown") { e.preventDefault(); move(i + 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); move(i < 0 ? -1 : i - 1); }
+    else if (e.key === "Home" || e.key === "PageUp") { e.preventDefault(); move(0); }
+    else if (e.key === "End" || e.key === "PageDown") { e.preventDefault(); move(-1); }
+    else if (e.key.length === 1 && /\S/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const c = e.key.toLowerCase();
+      for (let n = 1; n <= l.length; n++) { const it = l[(i + n) % l.length]; if (it.textContent.trim().toLowerCase().startsWith(c)) { e.preventDefault(); it.focus(); break; } }
+    }
+  };
+  const show = async (focusAt) => {
     const list = typeof items === "function" ? await items() : items;
-    open = h("div", { class: "menu", role: "menu" }, ...list.map(it => it === "-" ? h("hr") : h("button", { type: "button", role: "menuitem", class: it.danger ? "danger" : null,
-      onclick: () => { shut(); button.focus(); it.onclick(); } }, h("span", {}, it.label), it.sub ? h("small", {}, it.sub) : null)));
+    if (open) return;
+    open = h("div", { class: "menu", role: "menu", id, "aria-labelledby": button.id },
+      ...list.map(it => it === "-" ? h("hr", { role: "separator" }) : h("button", { type: "button", role: "menuitem", tabindex: "-1", class: it.danger ? "danger" : null,
+        onclick: () => { shut(); button.focus(); it.onclick(); } }, h("span", {}, it.label), it.sub ? h("small", {}, it.sub) : null)));
     document.body.append(open);
     const r = button.getBoundingClientRect(), w = Math.min(300, innerWidth - 16);
     Object.assign(open.style, { top: `${r.bottom + 6 + scrollY}px`, left: `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + scrollX}px`, width: `${w}px` });
-    button.setAttribute("aria-expanded", "true");
-    document.addEventListener("mousedown", away); document.addEventListener("keydown", key);
-    const f = open.querySelector("button"); if (f) f.focus();
+    button.setAttribute("aria-expanded", "true"); button.setAttribute("aria-controls", id);
+    document.addEventListener("mousedown", away); document.addEventListener("keydown", key, true); window.addEventListener("resize", shut);
+    move(focusAt);
+  };
+  button.setAttribute("aria-haspopup", "menu"); button.setAttribute("aria-expanded", "false");
+  button.addEventListener("click", () => { if (open) shut(); else show(0); });
+  button.addEventListener("keydown", (e) => {
+    if (open || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
+    e.preventDefault(); show(e.key === "ArrowUp" ? -1 : 0);
   });
   return shut;
 }
@@ -239,7 +304,7 @@ async function newRelease() {
   };
   if (!unsaved()) return go2();
   modal({ title: "Keep this release?", body: h("p", {}, "This release isn't saved in your library yet. Save a copy before starting a new one?"),
-    actions: [{ label: "Cancel" }, { label: "Don't save" , onclick: () => { setTimeout(go2, 0); } }, { label: "Save, then new", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(go2, 0); } }] });
+    actions: [{ label: "Cancel" }, { label: "Don't save" , onclick: () => { setTimeout(go2, 0); } }, { label: "Save, then new", primary: true, onclick: async () => { if (await saveToLibrary()) setTimeout(go2, 0); } }] });
 }
 function openFile() {
   const pick = () => {
@@ -249,13 +314,13 @@ function openFile() {
   };
   if (!unsaved()) return pick();
   modal({ title: "Open a file?", body: h("p", {}, "A release file replaces the one you're on, which has changes that aren't in your library. (A backup file only adds to your library.)"),
-    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: () => { setTimeout(pick, 0); } }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(pick, 0); } }] });
+    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: () => { setTimeout(pick, 0); } }, { label: "Save, then open", primary: true, onclick: async () => { if (await saveToLibrary()) setTimeout(pick, 0); } }] });
 }
 async function openSaved(id) {
-  const doOpen = async () => { if (await SP.library.open(id)) { markSaved(); go("design"); SP.toast("Opened"); } };
+  const doOpen = async () => { const r = await SP.library.open(id); if (r) { markSaved(); go("design"); openedToast(r); } else SP.toast("Couldn't find that saved release."); };
   if (!unsaved()) return doOpen();
   modal({ title: "Open another release?", body: h("p", {}, "The release you're on has changes that aren't in your library."),
-    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: doOpen }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); await doOpen(); } }] });
+    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: doOpen }, { label: "Save, then open", primary: true, onclick: async () => { if (await saveToLibrary()) await doOpen(); } }] });
 }
 function editDefaults() {
   const form = wordsForm(ownDefaults());
@@ -294,6 +359,8 @@ function welcome() {
 const FILE_VIEWS = ["export", "print"];
 function mountBar() {
   const bar = $("bar");
+  // keyboard users can jump past the dozen controls in the bar to the section they're on
+  bar.before(h("button", { type: "button", class: "skip", onclick: () => { const v = document.querySelector(".view:not([hidden])"); if (v) { v.tabIndex = -1; v.focus(); } } }, "Skip to content"));
   bar.innerHTML = `
     <a class="brand" href="#discover">Sleeve Press</a>
     <nav class="tabs" aria-label="Sections"></nav>
@@ -303,7 +370,7 @@ function mountBar() {
       <button type="button" class="btn small" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
       <button type="button" class="btn small" id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled>↷</button>
       <button type="button" class="btn small" id="newBtn" title="Start a new release">New</button>
-      <button type="button" class="btn small" id="openBtn" title="Open a saved release or a file">Open ▾</button>
+      <button type="button" class="btn small" id="openBtn" title="Open a saved release or a file">Open<span aria-hidden="true"> ▾</span></button>
       <button type="button" class="btn small primary" id="saveBtn" title="Save this release to your library (Ctrl+S)">Save</button>
       <button type="button" class="btn small" id="gearBtn" title="Settings" aria-label="Settings">⚙</button>
     </div>`;
@@ -316,7 +383,7 @@ function mountBar() {
   }
   const minor = order.filter(n => views[n].minor);
   if (minor.length) {
-    const more = h("button", { type: "button", class: "tabbtn", "data-go": "more" }, "More ▾"); nav.appendChild(more);
+    const more = h("button", { type: "button", class: "tabbtn", "data-go": "more" }, "More", h("span", { "aria-hidden": "true" }, " ▾")); nav.appendChild(more);
     menu(more, minor.map(n => ({ label: views[n].label, sub: views[n].sub, onclick: () => go(n) })));
   }
   const chip = $("relchip");
@@ -359,7 +426,7 @@ function mountBar() {
     const mod = e.ctrlKey || e.metaKey; if (!mod) return;
     const a = document.activeElement;
     const typing = !!a && (a.tagName === "TEXTAREA" || a.isContentEditable || (a.tagName === "INPUT" && /^(text|search|number|email|url|tel|password)$/i.test(a.type)));
-    if (e.key.toLowerCase() === "s") { e.preventDefault(); saveToLibrary(); }
+    if (e.key.toLowerCase() === "s") { e.preventDefault(); if (!e.repeat) saveToLibrary(); }
     else if (e.key.toLowerCase() === "z" && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (e.key.toLowerCase() === "y" && !typing) { e.preventDefault(); redo(); }
   });
@@ -367,9 +434,10 @@ function mountBar() {
 /* Get files = Export (digital) + Print, one tab with a switch at the top of each. */
 function filesSwitch(v) {
   const d = views[v]; if (!FILE_VIEWS.includes(v) || !d.el || d.el.querySelector(".files-switch")) return;
-  const sw = h("div", { class: "files-switch", role: "tablist", "aria-label": "Kind of files" },
-    h("a", { href: "#export", role: "tab", "aria-selected": String(v === "export") }, h("b", {}, "Digital"), h("small", {}, "covers, promo images, text")),
-    h("a", { href: "#print", role: "tab", "aria-selected": String(v === "print") }, h("b", {}, "Print"), h("small", {}, "CD inserts, vinyl labels, stickers")));
+  // two links to two pages, so a small nav with the current page marked, not a tab list (which promises arrow keys and panels)
+  const sw = h("nav", { class: "files-switch", "aria-label": "Kind of files" },
+    h("a", { href: "#export", "aria-current": v === "export" ? "page" : null }, h("b", {}, "Digital"), h("small", {}, "covers, promo images, text")),
+    h("a", { href: "#print", "aria-current": v === "print" ? "page" : null }, h("b", {}, "Print"), h("small", {}, "CD inserts, vinyl labels, stickers")));
   d.el.prepend(sw);
 }
 
@@ -421,5 +489,5 @@ function start() {
 }
 
 window.App = { modal, menu, newRelease, openFile, openSaved, editDefaults, resetEverything, unsaved, markSaved, completeLook, state, commit, applyLook, checkpoint, undo, redo, view, go, start, lookId, flagged, isFlagged, flag, unflag, toggleFlag,
-  smallImage, thumb, env, saveToLibrary, nextRelease, h, lazy, queue, current: () => current };
+  smallImage, thumb, env, saveToLibrary, openedToast, nextRelease, h, lazy, queue, current: () => current };
 })();

@@ -136,7 +136,7 @@ async function disc(e, D, hole = 41 / 117) {
   // The cover's own look, but with the words moved clear of the hub: artist near the top, title as one line near the bottom.
   const discSt = { ...st, title: titleOneLine(st), titleCase: "asis", titlePos: "lower", titleDy: 7, titleSize: Math.min(st.titleSize, 80), titleX: 0, titleAlign: "centre",
     align: "centre", margin: 19, artistY: 17, artistX: 0, artistAlign: "centre", artistRotate: "none", year: "", motifKind: "none", footer: "",
-    barcode: false, plate: false, labelMark: "none", frame: false, vignette: 0, titleRotate: "none", titleBleed: false };
+    barcode: false, plate: false, labelMark: "none", frame: false, vignette: 0, titleRotate: "none", titleBleed: false, titleWrap: false };   // one line: stacked lines would run into the hub
   ctx.drawImage(await cover({ ...e, st: discSt }, D), 0, 0);
   // a quiet ring of ground round the hub, with the catalogue set round it
   const r = D / 2, hubR = D * hole / 2, ringR = hubR + D * 0.075;
@@ -403,6 +403,7 @@ async function promo(e, id, scale = 1) {
     put(ctx, title, x, H * 0.89, W * 0.05, st.font, "700", tk, ink, 1, cw);
     finish(ctx, W, H, st);
   }
+  SR.trimScratch();   // the backdrop's shape mask and pattern layer aren't needed once the promo is drawn
   return c;
 }
 

@@ -123,7 +123,7 @@ App.view("library", {
       const ok = await SP.library.open(e.id);
       if (!ok) { SP.toast("Couldn't find that saved release."); return false; }
       markClean(); baseline.ts = e.updated;
-      if (then) await then(); else SP.toast(`Opened ${e.name}`);
+      if (then) await then(); else App.openedToast(ok, e.name);
       refreshAll(); return true;
     }
     function drawSaved() {
@@ -146,7 +146,7 @@ App.view("library", {
           h("div", { class: "lb-acts" },
             h("button", { type: "button", class: "btn small", "data-act": "open", onclick: () => openEntry(e) }, "Open"),
             h("button", { type: "button", class: "btn small", "data-act": "rename", onclick: () => inlineRename(name, e.name, n => SP.library.rename(e.id, n)) }, "Rename"),
-            h("button", { type: "button", class: "btn small", "data-act": "dup", onclick: () => openEntry(e, async () => { const id = await App.saveToLibrary(true); await SP.library.rename(id, e.name + " (copy)"); }) }, "Duplicate"),
+            h("button", { type: "button", class: "btn small", "data-act": "dup", onclick: () => openEntry(e, async () => { const id = await App.saveToLibrary(true); if (id) await SP.library.rename(id, e.name + " (copy)"); }) }, "Duplicate"),
             h("button", { type: "button", class: "btn small lb-del", "data-act": "delete", "aria-label": "Delete " + e.name, onclick: async () => {
               if (!confirm(`Delete “${e.name}” from your library? This can't be undone.`)) return;
               await SP.library.remove(e.id);
@@ -260,6 +260,8 @@ App.view("library", {
       const W = pad * 2 + cols * cell + (cols - 1) * gap, H = pad + head + rows * (cell + cap) + (rows - 1) * gap + pad;
       try { await Promise.all([document.fonts.load("800 40px Archivo"), document.fonts.load("500 20px 'IBM Plex Mono'")]); } catch (e) {}
       const imgs = await Promise.all(list.map(e => e.thumb ? loadImg(e.thumb) : null));
+      // each release's own year (entries saved before the index kept it: read from the saved record)
+      const years = await Promise.all(list.map(async e => String(e.year ?? (((await SP.vault.get("lib." + e.id)) || {}).record || { release: {} }).release.year ?? "").trim()));
       if (job !== sheetJob) return;
       const c = sheetCanvas; c.width = W; c.height = H; const g = c.getContext("2d");
       g.fillStyle = bg; g.fillRect(0, 0, W, H);
@@ -268,13 +270,15 @@ App.view("library", {
       g.fillText((d.release.label || "Catalogue").toUpperCase(), pad, pad + 40, W - pad * 2 - 160);
       g.font = "500 18px 'IBM Plex Mono', Menlo, monospace"; g.globalAlpha = 0.6;
       g.fillText(`${n} releases`, pad, pad + 72); g.textAlign = "right";
-      g.fillText(new Date().getFullYear(), W - pad, pad + 40); g.textAlign = "left"; g.globalAlpha = 1;
+      const ys = years.map(y => parseInt(y, 10)).filter(y => y > 1000).sort((a, b) => a - b);
+      const span = !ys.length ? "" : ys[0] === ys[ys.length - 1] ? String(ys[0]) : `${ys[0]}–${ys[ys.length - 1]}`;
+      g.fillText(span, W - pad, pad + 40); g.textAlign = "left"; g.globalAlpha = 1;
       g.fillStyle = accent; g.fillRect(pad, pad + head - 14, W - pad * 2, 3);
       list.forEach((e, i) => {
         const x = pad + (i % cols) * (cell + gap), y = pad + head + Math.floor(i / cols) * (cell + cap + gap);
         if (imgs[i]) g.drawImage(imgs[i], x, y, cell, cell); else { g.fillStyle = "rgba(127,127,127,.25)"; g.fillRect(x, y, cell, cell); }
         g.fillStyle = ink; g.font = "500 20px 'IBM Plex Mono', Menlo, monospace";
-        g.fillText(e.catalog || "—", x, y + cell + 28, cell);
+        g.fillText([e.catalog || "—", years[i]].filter(Boolean).join(" · "), x, y + cell + 28, cell);
         g.globalAlpha = 0.6; g.font = "400 15px 'IBM Plex Mono', Menlo, monospace";
         let t = e.name; while (t.length > 3 && g.measureText(t).width > cell) t = t.slice(0, -2);
         g.fillText(t === e.name ? t : t.trimEnd() + "…", x, y + cell + 50); g.globalAlpha = 1;

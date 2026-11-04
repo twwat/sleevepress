@@ -20,6 +20,20 @@
 .view-export .ex-ghead h2 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
 .view-export .ex-ghead p { margin: 0; font-size: 12.5px; color: var(--chalk-faint); }
 
+/* store check: what streaming stores turn a cover down for */
+.view-export .ex-store { border: 1px solid var(--rule-strong); background: var(--bench); padding: 10px 14px; margin-bottom: 14px; display: grid; gap: 6px; justify-items: start; }
+.view-export .ex-store:empty { display: none; }
+.view-export .ex-store h3 { margin: 0; font: 700 12px var(--f-ui); letter-spacing: .14em; text-transform: uppercase; display: inline-flex; align-items: center; gap: 8px; }
+.view-export .ex-store h3 b { font: 500 12px var(--f-mono); width: 14px; text-align: center; }
+.view-export .ex-store.ok { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 14px; }
+.view-export .ex-store.ok h3 b { color: var(--ok); }
+.view-export .ex-store.warn { border-color: color-mix(in srgb, var(--warn) 55%, var(--rule-strong)); }
+.view-export .ex-store.warn h3 { color: var(--warn); }
+.view-export .ex-store p { margin: 0; font-size: 12.5px; color: var(--chalk-dim); max-width: 90ch; }
+.view-export .ex-store ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; color: var(--chalk); max-width: 90ch; overflow-wrap: anywhere; }
+.view-export .ex-store li b { font-weight: 700; }
+.view-export .ex-store .btn { min-height: 32px; margin-top: 2px; }
+
 .view-export .ex-copy { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); align-items: end; margin-bottom: 14px; }
 .view-export .ex-copy .seg button { min-height: 36px; }
 
@@ -28,7 +42,9 @@
 .view-export .ex-grid-promo { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 980px) { .view-export .ex-grid-promo { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .view-export .ex-card { background: var(--bench); border: 1px solid var(--rule); display: flex; flex-direction: column; min-width: 0; }
-.view-export .ex-card.off { opacity: .6; }
+/* unticked: the picture fades, the words stay readable */
+.view-export .ex-card.off .ex-pv { opacity: .5; }
+.view-export .ex-card.off { border-color: var(--rule); }
 .view-export .ex-pv {
   aspect-ratio: 4 / 3; display: grid; place-items: center; padding: 12px; overflow: hidden;
   background: #0d0c0a; border-bottom: 1px solid var(--rule); position: relative;

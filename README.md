@@ -8,8 +8,8 @@ Cover art, print pieces and promo images for a release, all from one set of word
 |---|---|
 | **Discover** | An endless grid of designs for your release, one per seed. ♥ the ones you like, open one in Design, or ask for "more like this". Filter by mood (dark, light, bold, mono, warm, cool) and type feel, and keep parts of your current design fixed. |
 | **Design** | The sleeve editor. Click anything on the cover (title, artist, footer, marks, label, picture, background) to edit just that thing. Drag to move it, double-click words to retype them in place, and Ctrl/⌘ + scroll to zoom the picture. Shuffle, Variations and ♥ Flag sit above the cover. |
-| **Print** | Exact-size PDFs: CD booklet (single or folded), tray inlay with spines, card wallet, CD disc label, vinyl centre labels, and a sticker sheet. Crop marks, bleed and fold lines, on A4 or US Letter, with a grid mode for pre-cut label sheets. Print at 100% / Actual size. |
-| **Export** | Release-day files: streaming covers, back cover, promo designs (release post, story, YouTube thumbnail, video still, header banner, countdown teaser), the tracklist, a YouTube description with chapter timestamps, Suno prompts and the palette. Download one at a time or as a zip. |
+| **Print** | Exact-size PDFs: CD booklet (single or folded), tray inlay with spines, card wallet, CD disc label, vinyl centre labels, and a sticker sheet. Crop marks, bleed and fold lines, on A4 or US Letter, with a grid mode for pre-cut label sheets. The preview shows the safe area 3 mm inside each cut. Print at 100% / Actual size. |
+| **Export** | Release-day files: streaming covers (3000 px PNG or a smaller JPEG, 1400 px), back cover, promo designs (release post, story, YouTube thumbnail, video still, header banner, countdown teaser), the tracklist, release info for the distributor form, a YouTube description with chapter timestamps, Suno prompts and the palette. A store check flags cover text stores reject (web addresses, handles, dates, prices, "out now") and pictures too small for 3000 px. Download one at a time, or as a zip with folders and a README saying what each file is for. |
 | **Library** | Saved releases (with their pictures), flagged looks, your record label name and logo, a catalogue sheet of everything you've saved, and back up / restore. |
 | Titles, Suno style | Word tools: a seeded title brainstormer and a Suno style-prompt builder. They share the same release. |
 
@@ -34,6 +34,23 @@ shared/makers.js            Makers: print pieces and promo designs
 shared/pdf.js               PDF writer and zip writer
 shared/app.js               App: shell, routing, undo, flagging, saving
 shared/view-*.js / .css     one file pair per section
+tests/                      unit and browser tests (see Tests)
+```
+
+## Tests
+
+The app needs no install; the tests do (Node 22.2 or later):
+
+```bash
+npm install
+npm test
+```
+
+`npm run test:unit` runs only the fast Node tests (PDF and zip writers, track parser, record checks). `npm run test:browser` drives the real app in headless Chromium: saving, reloading, backup and restore, import of damaged files, undo, rendering (repeatable output, font loading, long titles, footer contrast), Discover, every section and phone width. Google Fonts requests are answered locally, so the tests run offline.
+
+```
+tests/unit/       node:test, scripts loaded into a vm (load.js)
+tests/browser/    node:test + Playwright (app.js opens the app)
 ```
 
 ## The release record

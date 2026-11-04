@@ -14,6 +14,13 @@ Never add Claude attribution to anything: no `Co-Authored-By: Claude` or `Claude
 - **Work from `TODO.md`.** Take the top open item, finish it, tick it with the commit hash, move on. Add new findings to it instead of repeating them in chat.
 - **Stop when the ask is done** or the agreed budget (time or number of commits) is used, and say so in one line.
 
+## Design work (patterns, textures, looks)
+
+- **References are inspiration, never images to copy.** Build seeded generators that capture what a reference set has in common and give a new design for every seed, in the sleeve's own palette (ground, ink, accent).
+- **The bar is real covers**, not swatches: a pattern must look good faint behind a title, loud with the words on plates, and in a band or edge, in any palette, scale and angle. Crisp edges, no seams, repeatable for the same seed.
+- **The owner judges the look; tests judge the code.** Before anything visual is committed: read the whole diff, run `npm test`, measure export cost against existing patterns (longest single step at 3000 px), then put real covers on the review page (`Sleeve Press Pattern Review` artifact) for a keep / rework / drop verdict. Only "keep" goes in.
+- Agents for design work build in scratch copies of the app, one family each, and hand back one functions file plus cover renders. They never edit the repo or run git.
+
 ## Tests
 
 If the repo has `package.json` and `tests/`, run `npm test` before every commit (Node 22.2+; browser tests use Playwright and run offline). A change that fixes a bug gets a test that fails without the fix. Don't commit with failing tests; don't skip or weaken a test to get green.

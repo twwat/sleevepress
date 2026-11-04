@@ -61,11 +61,21 @@ const lookOf = (st) => { const o = {}; for (const k of LOOK_KEYS) o[k] = st[k]; 
 /* ---------- fonts ---------- */
 const fontReady = {};
 const fontInfo = (face) => (window.Looks && Looks.FONT[face]) || { n: face, w: [600, 700] };
-function loadFont(face) {
-  if (!fontReady[face]) fontReady[face] = Promise.all(fontInfo(face).w.map(w => document.fonts.load(`${w} 100px "${face}"`))).catch(() => {});
-  return fontReady[face];
+/* Waits for the stylesheet first, and only remembers a load that worked, so a slow connection can't leave a face
+   on the fallback for the rest of the session. `text` pulls in the files for letters beyond basic Latin. */
+function loadFont(face, text) {
+  const specs = fontInfo(face).w.map(w => `${w} 100px "${face}"`);
+  if (!fontReady[face]) {
+    fontReady[face] = Promise.resolve(window.Looks && Looks.fontsCSS).then(() => Promise.all(specs.map(f => document.fonts.load(f))))
+      .then(() => { if (!specs.every(f => document.fonts.check(f))) delete fontReady[face]; }, () => { delete fontReady[face]; });
+  }
+  const p = fontReady[face];
+  // Letters outside basic Latin live in their own font files; asking with the text fetches them (instant once loaded).
+  if (!text || !/[^\x00-\x7f]/.test(text)) return p;
+  return p.then(() => Promise.all(specs.map(f => document.fonts.load(f, text))).catch(() => {}));
 }
-const loadFonts = (st) => Promise.all([loadFont(st.font), loadFont(st.bodyFont || st.font), loadFont(st.artistFont || st.bodyFont || st.font)]);
+const wordsOf = (st) => [st.artist, st.title, st.footer, st.catalog, st.year, st.label, st.plateText].filter(Boolean).join(" ");
+const loadFonts = (st) => { const t = wordsOf(st); return Promise.all([loadFont(st.font, t), loadFont(st.bodyFont || st.font, t), loadFont(st.artistFont || st.bodyFont || st.font, t)]); };
 /* Nearest weight the face actually has, so the browser never fakes a bold. */
 function weightFor(face, want) {
   const ws = fontInfo(face).w; want = Number(want);
@@ -74,15 +84,57 @@ function weightFor(face, want) {
 const faceStack = (f) => `"${f}", "Helvetica Neue", Arial, sans-serif`;
 
 /* ---------- tracked text ---------- */
+/* Whole strings, spaced by the canvas's own letterSpacing where the browser has it: kerning is kept, Arabic and
+   Hebrew join and run the right way, and emoji built from several code points stay whole. Older browsers fall back
+   to one grapheme at a time. Scripts whose letters join aren't tracked at all (spacing would pull them apart). */
+const HAS_SPACING = typeof CanvasRenderingContext2D !== "undefined" && "letterSpacing" in CanvasRenderingContext2D.prototype;
+const JOINED = /[\u0590-\u08ff\u0900-\u0dff\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\ufb1d-\ufdff\ufe70-\ufeff]/;
+const segmenter = typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : null;
+const graphemes = (t) => segmenter ? Array.from(segmenter.segment(t), g => g.segment) : Array.from(t);
+function withSpacing(ctx, text, trackEm, size, fn) {
+  if (JOINED.test(text)) trackEm = 0;
+  const track = trackEm * size, prev = ctx.letterSpacing;
+  ctx.letterSpacing = `${track}px`;
+  try { return fn(track); } finally { ctx.letterSpacing = prev; }
+}
 function drawTracked(ctx, text, x, y, trackEm, size, stroke) {
+  text = String(text);
+  if (HAS_SPACING || JOINED.test(text)) {
+    const paint = () => stroke ? ctx.strokeText(text, x, y) : ctx.fillText(text, x, y);
+    if (!HAS_SPACING) { paint(); return ctx.measureText(text).width; }
+    return withSpacing(ctx, text, trackEm, size, (track) => { paint(); return ctx.measureText(text).width - (text ? track : 0); });
+  }
   const track = trackEm * size; let cx = x;
-  for (const ch of text) { if (stroke) ctx.strokeText(ch, cx, y); else ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + track; }
+  for (const ch of graphemes(text)) { if (stroke) ctx.strokeText(ch, cx, y); else ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + track; }
   return cx - x - track;
 }
 function measureTracked(ctx, text, trackEm, size) {
+  text = String(text);
+  if (HAS_SPACING) return withSpacing(ctx, text, trackEm, size, (track) => ctx.measureText(text).width - (text ? track : 0));
+  if (JOINED.test(text)) return ctx.measureText(text).width;
   let w = 0, n = 0;
-  for (const ch of text) { w += ctx.measureText(ch).width; n++; }
+  for (const ch of graphemes(text)) { w += ctx.measureText(ch).width; n++; }
   return w + Math.max(0, n - 1) * trackEm * size;
+}
+/* Balanced line breaks for a one-line title that would otherwise shrink below ~55% of its size to fit `maxW`.
+   Tries 2 then 3 lines, choosing the breaks that make the widest line narrowest. null = leave it on one line. */
+function wrapTitle(ctx, line, trackEm, size, maxW) {
+  const words = line.split(/\s+/).filter(Boolean);
+  const w1 = measureTracked(ctx, line, trackEm, size);
+  if (words.length < 2 || w1 * 0.55 <= maxW) return null;
+  const width = (ws) => measureTracked(ctx, ws.join(" "), trackEm, size);
+  let best = null;
+  for (let i = 1; i < words.length; i++) {
+    const ls = [words.slice(0, i), words.slice(i)], w = Math.max(...ls.map(width));
+    if (!best || w < best.w) best = { w, ls };
+  }
+  if (best.w * 0.8 > maxW && words.length >= 3) {
+    for (let i = 1; i < words.length - 1; i++) for (let j = i + 1; j < words.length; j++) {
+      const ls = [words.slice(0, i), words.slice(i, j), words.slice(j)], w = Math.max(...ls.map(width));
+      if (w < best.w) best = { w, ls };
+    }
+  }
+  return best.ls.map(ws => ws.join(" "));
 }
 function applyCase(t, mode) {
   if (mode === "asis") return t;
@@ -90,6 +142,42 @@ function applyCase(t, mode) {
   if (mode === "title") return t.toLowerCase().replace(/(^|[\s\-("'])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
   return t.toUpperCase();
 }
+
+/* ---------- scratch canvases ----------
+   The words layer, the shape mask and the title-cut layers are borrowed for one step of a render and handed back,
+   so one canvas serves them in turn instead of a new sleeve-sized one each time. After a render, idle ones beyond a
+   small allowance (enough for the editor's preview) are freed on the spot: iOS Safari counts every live canvas
+   against a page-wide limit, and would otherwise hold a 3000 px export's 36 MB layers until garbage collection. */
+const LOW_MEMORY = !!(window.Patterns && Patterns.LOW_MEMORY);
+const KEEP_PX = LOW_MEMORY ? 1.5e6 : 3.2e6;   // ~one (two) 1200 px layers
+const idle = [];
+/* A canvas of exactly w × h, blank, with a fresh context state (as a new one would have). */
+function borrow(w, h) {
+  const i = idle.findIndex(c => c.width === w && c.height === h);
+  const c = i >= 0 ? idle.splice(i, 1)[0] : idle.pop() || document.createElement("canvas");
+  if (i >= 0) { const g = c.getContext("2d"); if (g.reset) g.reset(); else c.width = w; }   // setting the width clears and resets too
+  else { c.width = w; c.height = h; }
+  return c;
+}
+function giveBack(c) { if (c && !idle.includes(c)) idle.push(c); }
+/* Frees idle canvases (largest first) down to the allowance, and the pattern and glyph caches' oversized ones. */
+function trimScratch() {
+  idle.sort((a, b) => b.width * b.height - a.width * a.height);
+  let px = idle.reduce((t, c) => t + c.width * c.height, 0);
+  while (idle.length && (px > KEEP_PX || idle.length > 3)) { const c = idle.shift(); px -= c.width * c.height; c.width = 0; c.height = 0; }
+  if (window.Patterns && Patterns.trim) Patterns.trim();
+  if (window.Glyphs && Glyphs.trim) Glyphs.trim(LOW_MEMORY ? 0.6e6 : 1.5e6);
+}
+/* Pixels held by idle scratch canvases, for tests. */
+const scratchPixels = () => idle.reduce((t, c) => t + c.width * c.height, 0);
+/* Lets the page get on with other work (input, painting, timers) between the steps of a big render. A message
+   rather than a timer, which background tabs slow to once a second; and not scheduler.yield, which puts the
+   render ahead of everything else that is waiting. */
+const pause = (() => {
+  const ch = new MessageChannel(), q = [];
+  ch.port1.onmessage = () => q.shift()();
+  return () => new Promise(r => { q.push(r); ch.port2.postMessage(0); });
+})();
 
 /* ---------- image toning ---------- */
 const imageIds = new WeakMap(); let imageSeq = 0;
@@ -134,6 +222,8 @@ function toned(image, state) {
     }
     g.putImageData(id, 0, 0);
   }
+  // the one it replaces is no longer drawn by anyone (callers draw the result straight away): free it now
+  if (tonedCache.canvas) { tonedCache.canvas.width = 0; tonedCache.canvas.height = 0; }
   tonedCache = { key, canvas: c };
   return c;
 }
@@ -238,6 +328,7 @@ function halftone(c, g, w, h, st, q) {
     g.moveTo(x + r, y); g.arc(x, y, r, 0, Math.PI * 2);
   }
   g.fill();
+  sm.width = sm.height = 0;
 }
 /* Fills (x,y,w,h) with the image: zoom 100 covers the box, below 100 it floats smaller on the ground.
    shiftX/shiftY move it by a share of the box, so dragging feels the same at every zoom. */
@@ -389,13 +480,14 @@ function grainCanvas() {
   for (let i = 0; i < d.length; i += 4) { const v = 128 + (rnd() - 0.5) * 255; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
   g.putImageData(id, 0, 0); grainTile = c; return c;
 }
-function applyGrain(ctx, W, H, amount, S) {
+/* Rows of tiles starting at from <= y < to (all of them by default; a big render does it in two goes). */
+function applyGrain(ctx, W, H, amount, S, from = 0, to = H) {
   if (amount <= 0) return;
   ctx.save();
   ctx.globalCompositeOperation = "overlay";
   ctx.globalAlpha = (amount / 100) * 0.55;
   const tile = grainCanvas(); const n = Math.round(S / 6);
-  for (let y = 0; y < H; y += n) for (let x = 0; x < W; x += n) ctx.drawImage(tile, x, y, n, n);
+  for (let y = 0; y < H; y += n) if (y >= from && y < to) for (let x = 0; x < W; x += n) ctx.drawImage(tile, x, y, n, n);
   ctx.restore();
 }
 function applyVignette(ctx, W, H, state, bg, ink) {
@@ -422,15 +514,37 @@ function patternClip(st, W, H) {
     default: return null;
   }
 }
-function drawPattern(ctx, W, H, st, bg, ink, spot, k, clip, bgOverride) {
+function patternOpts(W, H, st, bg, ink, spot, k, clip, bgOverride) {
   const fg = st.patternColor === "accent" ? spot : ink, fg2 = st.patternColor === "duo" ? (fg === ink ? spot : ink) : fg;
+  return { S: Math.min(W, H), scale: st.patternScale, angle: st.patternAngle, fg, fg2, bg: bgOverride || bg,
+    alpha: Math.min(1, (st.patternAmt / 100) * k), seed: st.patternSeed || 1, unclipped: !clip };
+}
+function drawPattern(ctx, W, H, st, bg, ink, spot, k, clip, bgOverride) {
   ctx.save();
   if (clip) { ctx.beginPath(); clip(ctx); ctx.clip("evenodd"); }
-  try {
-    Patterns.draw(ctx, W, H, st.pattern, { S: Math.min(W, H), scale: st.patternScale, angle: st.patternAngle, fg, fg2, bg: bgOverride || bg,
-      alpha: Math.min(1, (st.patternAmt / 100) * k), seed: st.patternSeed || 1 });
-  } catch (e) { console.error(e); }
+  try { Patterns.draw(ctx, W, H, st.pattern, patternOpts(W, H, st, bg, ink, spot, k, clip, bgOverride)); } catch (e) { console.error(e); }
   ctx.restore();
+}
+/* The pattern drawBackdrop will draw (its settings, exactly as it will ask), or null. */
+function backdropPattern(W, H, st, bg, ink, spot, k = 1) {
+  if (!(st.pattern && st.pattern !== "none" && st.patternAmt > 0 && window.Patterns)) return null;
+  if (st.patternArea !== "shape") return patternOpts(W, H, st, bg, ink, spot, k, patternClip(st, W, H));
+  if (!(st.shape && st.shape !== "none" && st.shapeAmt > 0)) return null;
+  const other = (st.shapeColor === "ink" ? ink : spot) === ink ? spot : ink;
+  return patternOpts(W, H, st, bg, other, other, k / Math.max(0.2, st.patternAmt / 100) * 0.9, null, bg);
+}
+/* Builds (and caches) the backdrop's pattern ahead of drawBackdrop, a step at a time, so a big render can pause
+   in between. */
+async function prepareBackdrop(W, H, st, bg, ink, spot, k, step) {
+  const o = backdropPattern(W, H, st, bg, ink, spot, k);
+  if (!o || !Patterns.steps) return;
+  try { for (const _ of Patterns.steps(W, H, st.pattern, o)) await step(); } catch (e) { console.error(e); }
+}
+/* How far from its centre drawShape (filled) can put ink; Infinity when it may run to the edges. */
+function shapeReach(st, r, S) {
+  const legacy = ["circle", "ring", "square", "half", "bars"].includes(st.shape);
+  if (legacy && !st.shapeRot) return r + 2;   // drawn below, within the r × r box
+  return window.Glyphs && Glyphs.reach ? Glyphs.reach(st.shape, r, Math.max(1, S * 0.006)) : Infinity;
 }
 /* The big shape: the built-in five, or any of shared/glyphs.js's shapes. */
 function drawShape(ctx, st, cx, cy, r, col, a, col2, bg, S) {
@@ -448,6 +562,184 @@ function drawShape(ctx, st, cx, cy, r, col, a, col2, bg, S) {
   else if (st.shape === "bars") { const n = 7, bw = (r * 2) / (n * 2 - 1); for (let i = 0; i < n; i++) ctx.fillRect(cx - r + i * bw * 2, cy - r, bw, r * 2); }
   ctx.restore();
 }
+
+/* ---------- material textures: the sleeve printed on cloth, or a worn print ----------
+   linen, canvas and denim are woven cloth; distress is a halftone screen worn away in patches. Each is worked out a
+   pixel at a time from seeded hashes (no tiles, so no repeats and no seams) as a grey "photo" of the material, and
+   laid as light and dark only: white where the cloth is lighter than its average, black where darker, so it reads on
+   any ground and over any colour without tinting it. Thread sizes follow the sleeve size, so a 3000 px export is the
+   preview, sharper; when threads get too small for the pixels (thumbnails) the weave fades to its streaks. */
+const MATERIALS = ["linen", "canvas", "denim", "distress"];
+const isMaterial = (t) => MATERIALS.includes(t);
+function hash2(i, j, s) {
+  let h = (Math.imul(i | 0, 374761393) + Math.imul(j | 0, 668265263) + Math.imul(s | 0, 1440662683)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+const smooth = (t) => t * t * (3 - 2 * t);
+const clamp01 = (t) => t < 0 ? 0 : t > 1 ? 1 : t;
+function vnoise(x, y, s) {
+  const i = Math.floor(x), j = Math.floor(y), fx = smooth(x - i), fy = smooth(y - j);
+  const a = hash2(i, j, s), b = hash2(i + 1, j, s), c = hash2(i, j + 1, s), d = hash2(i + 1, j + 1, s);
+  return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+}
+function fbm(x, y, s, oct) {
+  let t = 0, a = 1, n = 0;
+  for (let o = 0; o < oct; o++) { t += a * vnoise(x, y, s + o * 101); n += a; x = x * 2.03 + 17.1; y = y * 2.03 + 5.3; a *= 0.5; }
+  return t / n;
+}
+/* A slow field fn(x, y) over an S-sized square, worked out on an n × n grid and looked up between its points. */
+function gridField(fn, n, S) {
+  const q = n / S, f = new Float32Array((n + 2) * (n + 2));
+  for (let b = 0; b <= n + 1; b++) for (let a = 0; a <= n + 1; a++) f[b * (n + 2) + a] = fn(a / q, b / q);
+  return (x, y) => {
+    const gx = Math.max(0, x * q), gy = Math.max(0, y * q), a = Math.min(n, gx | 0), b = Math.min(n, gy | 0), fx = gx - a, fy = gy - b, o = b * (n + 2) + a;
+    return (f[o] * (1 - fx) + f[o + 1] * fx) * (1 - fy) + (f[o + n + 2] * (1 - fx) + f[o + n + 3] * fx) * fy;
+  };
+}
+/* A plain weave as grey 0..1 at pixel (x, y): over-under threads `pw` apart that wander a little, each its own shade,
+   with fibre streaks along it. `o`: how uneven the yarn is (tone), how much it stands up (relief, lit from the top
+   left), how thick the slubs get, the gap between threads. */
+function plainWeave(x, y, pw, fine, s, o, wu, wv) {
+  const u = x / pw + wu(x, y) * o.wander, v = y / pw + wv(x, y) * o.wander;
+  const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j, warp = ((i + j) & 1) === 0;
+  const n = warp ? i : j, a = warp ? fu : fv, l = warp ? fv : fu, along = warp ? v : u, across = warp ? u : v;
+  const slub = clamp01((vnoise(along * 0.2 + 0.5, n * 1.7, s + 3 + warp) - 0.62) * 3.5) * o.slub;
+  const X = (2 * a - 1) / (1 - o.gap + 0.25 * slub), body = X * X < 1 ? 1 - X * X : 0;
+  const lift = Math.pow(Math.sin(Math.PI * l), 0.6), h = body * lift;
+  const rel = (-X * lift + Math.cos(Math.PI * l) * 0.6) * body;   // lit from the top left
+  const tone = (hash2(n, warp ? 7 : 9, s) - 0.5) * 0.5 + (vnoise(along * 0.06, n * 1.3, s + 1 + warp) - 0.5) * 0.9 + slub * 0.7;
+  const fib = vnoise(across * 5, along * 0.55, s + 30 + warp) - 0.5;
+  return 0.5 + (o.relief * (h - 0.45) + o.light * rel + o.fibre * fib) * fine + o.tone * tone;
+}
+const WEAVES = {
+  // linen: fine plain weave of uneven yarn: threads of different shades and thick slubs, so it streaks both ways
+  linen: { n: 230, gain: 1.3, o: { wander: 0.5, slub: 1, gap: 0.05, relief: 0.3, light: 0.06, fibre: 0.2, tone: 0.16 },
+    b(x, y, pw, fine, s, w) { return plainWeave(x, y, pw, fine, s, this.o, w.wu, w.wv); } },
+  // canvas: a heavier, even plain weave that stands up in relief, with dark pin-holes where the threads cross
+  canvas: { n: 115, gain: 1.15, o: { wander: 0.3, slub: 0.4, gap: 0.0, relief: 0.22, light: 0.42, fibre: 0.2, tone: 0.07 },
+    b(x, y, pw, fine, s, w) { return plainWeave(x, y, pw, fine, s, this.o, w.wu, w.wv); } },
+  // denim: a 3/1 twill, so the face is nearly all warp: ribs running up to the right, each a row of short slanting
+  // floats that catch the light (lighter in the middle, each its own shade, the ring-spun yarn flecked), with dark
+  // furrows between; the dye has faded in long vertical streaks
+  denim: { n: 170, gain: 1.15, b(x, y, pw, fine, s) {
+    const ca = 0.454, sa = 0.891;   // the rib's direction: 63° up from the horizontal
+    const c = (x * sa + y * ca) / pw, al = (x * ca - y * sa) / pw;
+    const ci = Math.floor(c), fc = c - ci;
+    const a2 = al / (1.4 + hash2(ci, 4, s)) + hash2(ci, 1, s) * 9, sk = Math.floor(a2), fa = a2 - sk;
+    const rib = Math.pow(Math.sin(Math.PI * fc), 0.8) * Math.pow(Math.sin(Math.PI * fa), 0.45);
+    const tk = hash2(ci, sk, s + 2);
+    const fib = vnoise(c * 5, al * 1.2, s + 30) - 0.5;
+    const streak = (vnoise(x / pw * 0.45, y / pw * 0.03, s + 1) - 0.5) * 0.22;
+    return 0.3 + rib * (0.22 + 0.38 * tk) * (0.35 + 0.65 * fine) + (0.34 * fib * rib) * fine + streak;
+  } },
+};
+/* The weave's average grey, so laying it leaves the ground's overall tone where it was. */
+function weaveMean(m, s) {
+  if (m.meanFor === s) return m.mean;
+  let t = 0; const n = 64, flat = { wu: () => 0, wv: () => 0 };
+  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) t += m.b(a * 7.31 + 0.5, b * 7.73 + 0.5, 9.7, 1, s, flat);
+  m.mean = t / (n * n); m.meanFor = s; return m.mean;
+}
+/* The worn halftone: a 45° dot screen whose dots follow a slow tone field, worn through in streaky patches (the wear
+   bites into dots at its edges, so they go ragged before they go) and along a few scratches. Ink cover 0..1 at (x, y). */
+function distressField(S, s) {
+  const cp = S / 110, c = Math.SQRT1_2, rnd = SP.mulberry32(s * 2654435761 >>> 0);
+  const th = (25 + rnd() * 60) * Math.PI / 180, ct = Math.cos(th), sn = Math.sin(th);
+  const lines = [];
+  for (let n = 0; n < 14; n++) {
+    const a = th + (rnd() - 0.5) * 0.6, L = S * (0.15 + rnd() * 0.6), mx = rnd() * S, my = rnd() * S;
+    lines.push([mx - Math.cos(a) * L / 2, my - Math.sin(a) * L / 2, Math.cos(a), Math.sin(a), L, Math.max(0.7, S * (0.0008 + rnd() * 0.0022))]);
+  }
+  // the slow fields: dot size, and wear (streaky along the angle th, broken up finer)
+  const tone = gridField((x, y) => 0.06 + 0.8 * smooth(clamp01((fbm(x / S * 1.6, y / S * 1.6, s + 7, 3) - 0.3) / 0.42)), 160, S);
+  const wear = gridField((x, y) => fbm((x * ct + y * sn) / S * 1.5, (-x * sn + y * ct) / S * 6, s + 11, 4) + (fbm(x / S * 11, y / S * 11, s + 13, 3) - 0.5) * 0.7, 160, S);
+  // worn through on 30–50% of the sleeve whatever the seed
+  const sample = []; for (let b = 0; b < 64; b++) for (let a = 0; a < 64; a++) sample.push(wear((a + 0.5) * S / 64, (b + 0.5) * S / 64));
+  const cut = sample.sort((p, q) => p - q)[Math.floor(sample.length * (0.3 + 0.2 * rnd()))];
+  const radius = new Map();   // per dot: its radius in pixels
+  const dot = (ci, cj) => {
+    const key = ci * 8192 + cj; let r = radius.get(key);
+    if (r === undefined) {
+      const cu = (ci + 0.5) * cp, cv = (cj + 0.5) * cp, X = (cu - cv) * c, Y = (cu + cv) * c;   // the dot's centre
+      r = cp * 0.5 * Math.sqrt(tone(X, Y)) * (0.85 + 0.3 * hash2(ci, cj, s + 17));
+      radius.set(key, r);
+    }
+    return r;
+  };
+  const rough = cp * 0.055, bite = 0.07;
+  return (x, y) => {
+    // worn: below 0 gone; just above it the dots are eaten away to ragged crumbs
+    const w = wear(x, y) + (vnoise(x / cp * 0.9, y / cp * 0.9, s + 19) - 0.5) * 0.08 - cut;
+    if (w <= 0) return 0;
+    const gu = (x + y) * c / cp, gv = (y - x) * c / cp, ci = Math.floor(gu), cj = Math.floor(gv);
+    const eat = w < bite ? 1 - w / bite : 0;
+    const r = dot(ci, cj) * (1 - 0.8 * eat) - (vnoise(x / cp * 3, y / cp * 3, s + 23) - 0.5) * rough * (2 + 3 * eat);
+    const du = gu - ci - 0.5, dv = gv - cj - 0.5, d = Math.sqrt(du * du + dv * dv) * cp;
+    let cov = clamp01(r - d + 0.5);
+    if (cov > 0) for (const [x0, y0, dx, dy, L, lw] of lines) {
+      const t = (x - x0) * dx + (y - y0) * dy;
+      if (t < 0 || t > L) continue;
+      const e = Math.abs((x - x0) * dy - (y - y0) * dx), half = lw * Math.min(1, 3 * Math.min(t, L - t) / L + 0.15);
+      if (e < half + 1) cov *= clamp01(e - half);
+    }
+    return cov;
+  };
+}
+/* The texture's grey at pixel (x, y), signed: > 0 lightens, < 0 darkens (-1..1). Cloth is cloth, so the weaves use
+   one seed; the worn halftone wears differently on every sleeve (its pattern seed). */
+function materialPixels(kind, S, s, light) {
+  if (kind === "distress") { const f = distressField(S, s); return light ? (x, y) => f(x, y) * 0.45 : (x, y) => -f(x, y) * 0.42; }
+  const m = WEAVES[kind], pw = S / m.n, fine = clamp01((pw - 2.2) / 3), mean = weaveMean(m, s);
+  const mott = (kind === "denim" ? 0.07 : 0.06) * 2;
+  const mottle = gridField((x, y) => (fbm(x / S * 5, y / S * 5, s + 21, 3) - 0.5) * mott, 96, S);   // a slow unevenness: dye, sizing, wear
+  // the threads' slow wander, across and along
+  const w = { wu: gridField((x, y) => vnoise(x / pw * 0.07, y / pw * 0.02, s + 40) - 0.5, 160, S), wv: gridField((x, y) => vnoise(x / pw * 0.02, y / pw * 0.07, s + 41) - 0.5, 160, S) };
+  return (x, y) => (m.b(x, y, pw, fine, s, w) - mean + mottle(x, y)) * m.gain;
+}
+/* Rows y0 .. y0+h of the texture into `img` (W wide): white or black, its strength in the alpha. */
+function fillMaterial(img, px, W, y0, h) {
+  const d = img.data;
+  for (let y = 0; y < h; y++) for (let x = 0; x < W; x++) {
+    const v = px(x + 0.5, y0 + y + 0.5), o = (y * W + x) * 4, c = v > 0 ? 255 : 0;
+    d[o] = d[o + 1] = d[o + 2] = c; d[o + 3] = Math.min(255, Math.abs(v) * 255 + 0.5);
+  }
+}
+/* Preview-sized textures are kept, most recent last, so redrawing the editor's preview or a page of Discover cards
+   costs a drawImage; export-sized ones are worked out a strip at a time and not kept. */
+const MATERIAL_KEEP = LOW_MEMORY ? 1.5e6 : 3e6, MATERIAL_MAX = 1.5e6, materialCache = [];
+function materialLayer(kind, W, H, s, light) {
+  const key = `${kind} ${W} ${H} ${s} ${light}`, i = materialCache.findIndex(e => e.key === key);
+  if (i >= 0) { const e = materialCache.splice(i, 1)[0]; materialCache.push(e); return e.c; }
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d"), img = g.createImageData(W, H);
+  fillMaterial(img, materialPixels(kind, Math.min(W, H), s, light), W, 0, H); g.putImageData(img, 0, 0);
+  materialCache.push({ key, c });
+  let px = materialCache.reduce((t, e) => t + e.c.width * e.c.height, 0);
+  while (materialCache.length > 1 && px > MATERIAL_KEEP) { const e = materialCache.shift(); px -= e.c.width * e.c.height; e.c.width = e.c.height = 0; }
+  return c;
+}
+/* Draws a material texture over (0,0)–(W,H). A generator, so a big render can pause between strips; drawMaterial
+   runs it to the end. `bg` picks which way the halftone goes (dark dots on a light ground, light on a dark one). */
+function* materialSteps(ctx, W, H, st, bg, k = 1) {
+  const kind = st.texture, a = clamp01((st.textureAmt / 100) * k);
+  if (!isMaterial(kind) || a <= 0) return;
+  W = Math.ceil(W); H = Math.ceil(H);
+  const S = Math.min(W, H), s = kind === "distress" ? (st.patternSeed || 1) | 0 : 1, light = kind === "distress" && lum(bg) < 0.4;
+  ctx.save(); ctx.globalAlpha = a;
+  if (W * H <= MATERIAL_MAX) { try { ctx.drawImage(materialLayer(kind, W, H, s, light), 0, 0); } finally { ctx.restore(); } return; }
+  const px = materialPixels(kind, S, s, light), rows = Math.max(1, Math.min(H, Math.floor(262144 / W))), strip = borrow(W, rows), g = strip.getContext("2d");
+  try {
+    const img = g.createImageData(W, rows);
+    for (let y0 = 0; y0 < H; y0 += rows) {
+      const h = Math.min(rows, H - y0);
+      fillMaterial(img, px, W, y0, h); g.putImageData(img, 0, 0);
+      ctx.drawImage(strip, 0, 0, W, h, 0, y0, W, h);
+      yield;
+    }
+  } finally { ctx.restore(); giveBack(strip); }
+}
+function drawMaterial(ctx, W, H, st, bg, k) { for (const _ of materialSteps(ctx, W, H, st, bg, k)); }
 
 /* ---------- backdrop: wash, big shape, texture. `k` scales strength (the back sleeve uses less). ---------- */
 function drawBackdrop(ctx, W, H, st, bg, ink, spot, k = 1) {
@@ -471,15 +763,23 @@ function drawBackdrop(ctx, W, H, st, bg, ink, spot, k = 1) {
     if (hasPattern && st.patternArea === "shape") {
       // the pattern lives inside the shape's silhouette
       shapeAt(col, a);
-      const m = document.createElement("canvas"); m.width = Math.ceil(W); m.height = Math.ceil(H);
-      const mc = m.getContext("2d");
-      drawShape(mc, { ...st, shapeOutline: false }, cx, cy, r, [0, 0, 0], 1, [0, 0, 0], bg, S);
-      mc.globalCompositeOperation = "source-in";
-      drawPattern(mc, W, H, st, bg, col === ink ? spot : ink, col === ink ? spot : ink, k / Math.max(0.2, st.patternAmt / 100) * 0.9, null, bg);
-      ctx.save(); ctx.globalAlpha = Math.min(1, (st.patternAmt / 100) * 1.4); ctx.drawImage(m, 0, 0); ctx.restore();
+      // The mask need only reach the shape's right and bottom edges (beyond them a sleeve-sized mask is empty, and
+      // laying empty pixels changes nothing). It can't be cropped on the left or top too: the shape drawn shifted
+      // would round its edge points differently and move a few edge pixels by a shade.
+      const R = shapeReach(st, r, S) + 4;
+      const X1 = Math.min(Math.ceil(W), Math.ceil(cx + R)), Y1 = Math.min(Math.ceil(H), Math.ceil(cy + R));
+      if (X1 > 0 && Y1 > 0) {
+        const m = borrow(X1, Y1), mc = m.getContext("2d");
+        drawShape(mc, { ...st, shapeOutline: false }, cx, cy, r, [0, 0, 0], 1, [0, 0, 0], bg, S);
+        mc.globalCompositeOperation = "source-in";
+        drawPattern(mc, W, H, st, bg, col === ink ? spot : ink, col === ink ? spot : ink, k / Math.max(0.2, st.patternAmt / 100) * 0.9, null, bg);   // as backdropPattern
+        ctx.save(); ctx.globalAlpha = Math.min(1, (st.patternAmt / 100) * 1.4); ctx.drawImage(m, 0, 0); ctx.restore();
+        giveBack(m);
+      }
     } else shapeAt(col, a);
   }
-  if (st.texture && st.texture !== "none" && st.textureAmt > 0) {
+  if (isMaterial(st.texture)) drawMaterial(ctx, W, H, st, bg, k);
+  else if (st.texture && st.texture !== "none" && st.textureAmt > 0) {
     const a = (st.textureAmt / 100) * k; ctx.save();
     if (st.texture === "halftone") {
       const p = S * 0.014; ctx.fillStyle = rgba(ink, 0.22 * a);
@@ -610,14 +910,14 @@ function drawMotif(ctx, S, st, xStart, top, ink, spot, seedText) {
 function motifWidth(S, st) { const k = st.motifSize / 100; return (st.count - 1) * S * 0.0232 * st.motifPitch / 100 + S * 0.0105 * k * (st.motifKind === "slants" ? 1.6 : 1.2); }
 
 /* ---------- record label mark ---------- */
-const logoCache = new Map();
+const logoCache = new Map(), LOGO_TINTS = LOW_MEMORY ? 2 : 6;   // each up to 800 px; Discover asks for a new colour per card
 /* Recolours a logo: tint keeps its alpha and fills it with one colour; knockout turns a dark-on-white logo into colour on clear. */
 function tintedLogo(logo, mode, rgb) {
   if (!logo) return null;
   if (mode === "original") return logo;
   if (!imageIds.has(logo)) imageIds.set(logo, ++imageSeq);
   const key = [imageIds.get(logo), mode, rgb.join(",")].join("|");
-  if (logoCache.has(key)) return logoCache.get(key);
+  if (logoCache.has(key)) { const c = logoCache.get(key); logoCache.delete(key); logoCache.set(key, c); return c; }
   const iw = logo.naturalWidth || logo.width, ih = logo.naturalHeight || logo.height, s = Math.min(1, 800 / Math.max(iw, ih));
   const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(iw * s)); c.height = Math.max(1, Math.round(ih * s));
   const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(logo, 0, 0, c.width, c.height);
@@ -627,7 +927,7 @@ function tintedLogo(logo, mode, rgb) {
     d[i] = rgb[0]; d[i + 1] = rgb[1]; d[i + 2] = rgb[2]; d[i + 3] = Math.min(255, mode === "knockout" ? a * 1.25 : a);
   }
   g.putImageData(id, 0, 0);
-  if (logoCache.size > 12) logoCache.clear();
+  while (logoCache.size >= LOGO_TINTS) { const [k0, c0] = logoCache.entries().next().value; logoCache.delete(k0); c0.width = c0.height = 0; }
   logoCache.set(key, c); return c;
 }
 /* Draws the mark centred on (cx, cy); returns its box. */
@@ -728,18 +1028,33 @@ function sideRect(side, x, y, w, h) {
   const x0 = Math.min(...xs), y0 = Math.min(...ys);
   return { x: x0, y: y0, w: Math.max(...xs) - x0, h: Math.max(...ys) - y0 };
 }
-/* A scratch layer the size of the target with the same transform, for treatments that cut into the letters. */
-let scratch = null;
-function layerFor(ctx) {
-  const c = ctx.canvas;
-  if (!scratch) scratch = document.createElement("canvas");
-  if (scratch.width !== c.width || scratch.height !== c.height) { scratch.width = c.width; scratch.height = c.height; }
-  const g = scratch.getContext("2d");
-  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1; g.clearRect(0, 0, c.width, c.height);
-  g.setTransform(ctx.getTransform()); g.textBaseline = ctx.textBaseline;
+/* A scratch layer with the target's transform, for treatments that cut into the letters. It covers only `box`
+   (x, y, w, h in the target's user space, which must hold everything drawn on it), on whole device pixels, so
+   it lands exactly where a full-size layer would. */
+function layerFor(ctx, box) {
+  const t = ctx.getTransform(), W = ctx.canvas.width, H = ctx.canvas.height;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of [[box.x, box.y], [box.x + box.w, box.y], [box.x, box.y + box.h], [box.x + box.w, box.y + box.h]]) {
+    const X = t.a * x + t.c * y + t.e, Y = t.b * x + t.d * y + t.f;
+    x0 = Math.min(x0, X); y0 = Math.min(y0, Y); x1 = Math.max(x1, X); y1 = Math.max(y1, Y);
+  }
+  x0 = Math.max(0, Math.floor(x0) - 2); y0 = Math.max(0, Math.floor(y0) - 2); x1 = Math.min(W, Math.ceil(x1) + 2); y1 = Math.min(H, Math.ceil(y1) + 2);
+  const c = borrow(Math.max(1, x1 - x0), Math.max(1, y1 - y0)), g = c.getContext("2d");
+  g.setTransform(t.a, t.b, t.c, t.d, t.e - x0, t.f - y0); g.textBaseline = ctx.textBaseline;
+  g._at = [x0, y0];
   return g;
 }
-function stampLayer(ctx, g) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(g.canvas, 0, 0); ctx.restore(); }
+/* Lays the layer on the target (whole, at its whole-pixel spot) and hands its canvas back. */
+function stampLayer(ctx, g) {
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(g.canvas, g._at[0], g._at[1]); ctx.restore();
+  giveBack(g.canvas);
+}
+/* Room round a line of title letters for any glyph's ink (accents, tails, overhangs), in its own units. */
+const inkBox = (placed) => {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  placed.forEach(p => { x0 = Math.min(x0, p.x - p.size); x1 = Math.max(x1, p.x + p.w + p.size); y0 = Math.min(y0, p.y - p.size * 1.6); y1 = Math.max(y1, p.y + p.size * 0.8); });
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+};
 const heightOf = (g, p, lower) => { g.font = p.font; return g.measureText(lower ? "x" : "H").actualBoundingBoxAscent || p.size * (lower ? 0.5 : 0.72); };
 const fillLines = (g, placed, o, col) => placed.forEach(p => { g.font = p.font; g.fillStyle = rgba(col || p.col, 1); drawTracked(g, p.l, p.x, p.y, o.trackEm, p.size); });
 /* The newer title treatments. Each returns { paint, box?, grow? }: box replaces the measured plate, grow widens it. */
@@ -761,7 +1076,7 @@ const TITLE_FX = {
   stencil(ctx, placed, o) {
     const lower = o.st.titleCase === "lower";
     return { paint() {
-      const g = layerFor(ctx); fillLines(g, placed, o);
+      const g = layerFor(ctx, inkBox(placed)); fillLines(g, placed, o);
       g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
       placed.forEach(p => { const h = heightOf(g, p, lower), t = Math.max(1.2, p.size * 0.055); g.fillRect(p.x - p.size, p.y - h * 0.52 - t / 2, p.w + p.size * 2, t); });
       stampLayer(ctx, g);
@@ -771,7 +1086,7 @@ const TITLE_FX = {
   stripe(ctx, placed, o) {
     const lower = o.st.titleCase === "lower";
     return { paint() {
-      const g = layerFor(ctx); fillLines(g, placed, o);
+      const g = layerFor(ctx, inkBox(placed)); fillLines(g, placed, o);
       g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000";
       placed.forEach(p => {
         const h = heightOf(g, p, lower), n = Math.max(3, Math.round(h / (p.size * 0.11))), pitch = h / (n - 0.4), gap = pitch * 0.4;
@@ -788,7 +1103,7 @@ const TITLE_FX = {
     const box = { left: left - pad, right: right + pad, top: top - pad, bot: placed[placed.length - 1].y + pad };
     ctx.font = placed[placed.length - 1].font;
     return { box, paint() {
-      const g = layerFor(ctx); g.fillStyle = rgba(col, 1); g.fillRect(box.left, box.top, box.right - box.left, box.bot - box.top);
+      const g = layerFor(ctx, { x: box.left, y: box.top, w: box.right - box.left, h: box.bot - box.top }); g.fillStyle = rgba(col, 1); g.fillRect(box.left, box.top, box.right - box.left, box.bot - box.top);
       g.globalCompositeOperation = "destination-out"; fillLines(g, placed, o, [0, 0, 0]);
       stampLayer(ctx, g);
     } };
@@ -806,11 +1121,19 @@ const TITLE_FX = {
 };
 
 /* ---------- the sleeve ---------- */
+/* Big renders (exports) pause between steps so the page stays responsive; the picture is the same either way. */
+const PAUSE_PX = 1.5e6, noPause = () => null;
 async function render(canvas, state, image, logo) {
+  let words = null;
+  try { return await renderSleeve(canvas, state, image, logo, (c) => (words = c)); }
+  finally { giveBack(words); trimScratch(); }
+}
+async function renderSleeve(canvas, state, image, logo, keepWords) {
   const st = state, S = canvas.width;
   const base = canvas.getContext("2d");
   let ctx = base;   // switches to a separate words layer while plates are on (see below)
   await loadFonts(st);
+  const step = canvas.width * canvas.height >= PAUSE_PX ? pause : noPause;
   const boxes = {};
 
   const bg = hexToRgb(st.bg) || [21, 18, 15];
@@ -832,15 +1155,20 @@ async function render(canvas, state, image, logo) {
     ctx.restore();
     boxes.image = { x: b.x, y: b.y, w: b.w, h: b.h };
   }
+  await step();
 
-  drawBackdrop(ctx, S, S, st, bg, ink, spot);
+  if (step !== noPause) { await prepareBackdrop(S, S, st, bg, ink, spot, 1, step); await step(); }
+  const surface = isMaterial(st.texture);   // cloth is the surface the whole sleeve is printed on: it goes over the words too
+  drawBackdrop(ctx, S, S, surface ? { ...st, texture: "none" } : st, bg, ink, spot);
+  await step();
   applyVignette(ctx, S, S, st, bg, ink);
   drawFrame(ctx, S, S, st, ink, spot);
+  await step();
 
   const X = S * st.margin / 100;
   const alignOf = (el) => st[el + "Align"] || st.align;
   // A sideways title takes a strip down one edge; the other words keep to the column beside it (XL / XR are that column's margins).
-  const lines = st.title.split("\n").map(l => l.trim()).filter(Boolean).map(l => applyCase(l, st.titleCase));
+  let lines = st.title.split("\n").map(l => l.trim()).filter(Boolean).map(l => applyCase(l, st.titleCase));
   const rot = lines.length && (st.titleRotate === "up" || st.titleRotate === "down") ? st.titleRotate : "";
   const side = rot ? sideTitle(ctx, st, lines, S, X, faceStack(st.font), k) : null;
   let XL = X, XR = X;
@@ -853,9 +1181,7 @@ async function render(canvas, state, image, logo) {
   const plates = [];
   const plate = (el, x, y, w, h, px, py = px) => { if (plateOn(el) && w > 0) plates.push([x - px, y - py, w + px * 2, h + py * 2]); };
   let words = null;
-  if (st.plates && st.plates !== "none") {
-    words = document.createElement("canvas"); words.width = canvas.width; words.height = canvas.height; ctx = words.getContext("2d");
-  }
+  if (st.plates && st.plates !== "none") { words = keepWords(borrow(canvas.width, canvas.height)); ctx = words.getContext("2d"); }
   ctx.textBaseline = "alphabetic";
 
   // Artist (+ year)
@@ -924,6 +1250,12 @@ async function render(canvas, state, image, logo) {
       if (artistText && !rotated && artistY < bottom) topLimit = Math.max(topLimit, artistY + S * 0.102);
       if (st.motifKind !== "none" && motifTop < bottom) topLimit = Math.max(topLimit, motifTop + motifH + S * 0.054);
       ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
+      // A long title typed on one line would shrink to a sliver: set it on balanced lines instead (display only;
+      // the words stay as typed, and a line break typed by hand always wins).
+      if (lines.length === 1 && !st.titleBleed && st.titleWrap !== false) {
+        const wrapped = wrapTitle(ctx, lines[0], trackEm, size, maxW);
+        if (wrapped) lines = wrapped;
+      }
       const widest = Math.max(...lines.map(l => measureTracked(ctx, l, trackEm, size) / size)), em0 = size;
       // bleed: the widest line overshoots the far edge (both edges when centred) and the sleeve crops it
       const bleed = !!st.titleBleed, reach = alignOf("title") === "centre" ? S : S - X;
@@ -941,7 +1273,7 @@ async function render(canvas, state, image, logo) {
       } else {
         let blockH = size * lead * (lines.length - 1) + size * 0.72;
         if (bleed && blockH > S * 0.8) { size *= S * 0.8 / blockH; blockH = size * lead * (lines.length - 1) + size * 0.72; }
-        if (bottom - blockH < topLimit) size *= Math.max(0.45, (bottom - topLimit) / blockH);
+        if (bottom - blockH < topLimit) size *= Math.max(0.3, (bottom - topLimit) / blockH);   // floor low enough that tall stacks clear the artist
       }
       ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
       const optical = size * 0.035, al = alignOf("title"), dx = S * (st.titleX || 0) / 100;
@@ -1050,13 +1382,16 @@ async function render(canvas, state, image, logo) {
   const lb = drawLabelMark(ctx, S, st, S * st.labelX / 100, S * st.labelY / 100, colourOf(st.labelColor), bodyFace, logo);
   if (lb) boxes.label = lb;
 
+  await step();
   if (words) {
     ctx = base;
     ctx.fillStyle = rgba(bg, 1); plates.forEach(r => ctx.fillRect(...r));
     ctx.drawImage(words, 0, 0);
   }
 
-  applyGrain(ctx, S, S, st.grain, S);
+  if (surface) for (const _ of materialSteps(ctx, S, S, st, bg)) await step();
+  if (step === noPause) applyGrain(ctx, S, S, st.grain, S);
+  else { applyGrain(ctx, S, S, st.grain, S, 0, S / 2); await step(); applyGrain(ctx, S, S, st.grain, S, S / 2, S); }
   return boxes;
 }
 
@@ -1068,6 +1403,7 @@ function filename(state, size, tag) {
 window.SleeveRender = {
   SLEEVE_DEFAULTS, TITLE_STYLES, IMG_EFFECTS, TITLE_ROTATES, RELEASE_KEYS, PALETTE_KEYS, LOOK_KEYS, IMG_MODES, lookOf, imageBox, boxPath, flatten, render, filename, toned, drawCover,
   loadFont, loadFonts, weightFor, faceStack, fontInfo, drawTracked, measureTracked, applyCase, drawBarcode, barcodeWidth, barcodeReversed, eanDigits,
-  applyGrain, applyVignette, drawBackdrop, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth, drawShape, drawPattern, patternClip, BUILTIN_MARKS,
+  MATERIALS, applyGrain, applyVignette, drawBackdrop, drawMaterial, drawFrame, drawLabelMark, tintedLogo, drawMotif, motifWidth, drawShape, drawPattern, patternClip, BUILTIN_MARKS,
+  trimScratch, scratchPixels,
 };
 })();

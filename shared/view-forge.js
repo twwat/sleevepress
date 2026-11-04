@@ -261,7 +261,10 @@ const section = (key, title, body, open) => `
     <summary><span>${title}</span><small id="sf-${key}Sum"></small></summary>
     <div class="fields">${body}</div>
   </details>`;
-const lockHead = (legend, lock) => `<div class="fh"><span class="legend">${legend}</span><button type="button" class="lockbtn" data-lock="${lock}" aria-pressed="false" title="Keep this when shuffling">lock</button></div>`;
+/* What each lock keeps, in words, so every "lock" button says which one it is. */
+const LOCK_NAMES = { genre: "genre", sub: "sub-genre", bpm: "tempo", era: "era", mood: "mood", inst: "instruments", vocals: "voice", prod: "production" };
+const lockBtn = (lock) => `<button type="button" class="lockbtn" data-lock="${lock}" aria-pressed="false" aria-label="Lock ${LOCK_NAMES[lock]}" title="Keep this when shuffling">lock</button>`;
+const lockHead = (legend, lock) => `<div class="fh"><span class="legend">${legend}</span>${lockBtn(lock)}</div>`;
 
 function mount(root) {
   el = root;
@@ -341,17 +344,17 @@ function mount(root) {
       </details>
     </div>
 
-    <aside class="ticket" aria-label="Style settings">
+    <div class="ticket" role="region" aria-label="Style settings">
       ${section("genre", "Genre", `
         <div class="row">
-          <label class="f"><span>Genre <button type="button" class="lockbtn" data-lock="genre" aria-pressed="false" title="Keep this when shuffling">lock</button></span><select id="sf-genre"></select></label>
+          <div class="f"><span class="legend"><label for="sf-genre">Genre</label> ${lockBtn("genre")}</span><select id="sf-genre"></select></div>
           <label class="f"><span>Shuffle within</span><select id="sf-family"><option value="any">Everything</option></select></label>
         </div>
         ${lockHead("Sub-genre", "sub")}
         <div class="chips" id="sf-subChips"></div>`, true)}
       ${section("tempo", "Tempo, key, era", `
-        <div class="fh"><span class="legend">Tempo <output id="sf-bpmOut"></output></span><label class="check"><input type="checkbox" id="sf-bpmOn"> in prompt</label><button type="button" class="lockbtn" data-lock="bpm" aria-pressed="false" title="Keep this when shuffling">lock</button></div>
-        <input type="range" id="sf-bpm" min="60" max="190" step="1" aria-label="BPM">
+        <div class="fh"><span class="legend">Tempo <output id="sf-bpmOut"></output></span><label class="check"><input type="checkbox" id="sf-bpmOn"> in prompt</label>${lockBtn("bpm")}</div>
+        <input type="range" id="sf-bpm" min="60" max="190" step="1" aria-label="Tempo (BPM)">
         <label class="f"><span>Key <output>a track's own key wins</output></span><select id="sf-key"><option value="">None</option></select></label>
         ${lockHead("Era", "era")}
         <div class="chips" id="sf-eraChips"></div>`, true)}
@@ -384,7 +387,7 @@ function mount(root) {
           <button type="button" data-v="inst">Instruments</button>
         </div>
         <p class="hint">Check your Suno model's limit. Trimming drops production first and never the genre.</p>`)}
-    </aside>
+    </div>
   </div>`;
 
   GENRES.forEach(x => q("genre").add(new Option(x.id, x.id)));
