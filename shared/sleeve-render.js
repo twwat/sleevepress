@@ -1072,7 +1072,7 @@ async function renderSleeve(canvas, state, image, logo, keepWords) {
       ctx.font = `${weightFor(st.font, "700")} ${size}px ${face}`;
       // A long title typed on one line would shrink to a sliver: set it on balanced lines instead (display only;
       // the words stay as typed, and a line break typed by hand always wins).
-      if (lines.length === 1 && !st.titleBleed) {
+      if (lines.length === 1 && !st.titleBleed && st.titleWrap !== false) {
         const wrapped = wrapTitle(ctx, lines[0], trackEm, size, maxW);
         if (wrapped) lines = wrapped;
       }

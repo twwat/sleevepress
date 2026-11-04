@@ -56,6 +56,9 @@ test("a long one-line title is set on balanced lines, not shrunk to a sliver", {
   const long = "THE EXTRAORDINARILY LONG TITLE OF A RECORD THAT NOBODY WILL REMEMBER";
   const { boxes } = await render(a.page, { title: long, titleBleed: false, titleRotate: "none", titleStyle: "solid" }, 600);
   assert.ok(boxes.title.h > 600 * 0.08, `title block is ${boxes.title.h.toFixed(1)} px tall`);
+  // the disc label asks for one line (stacked lines would run into the hub)
+  const oneLine = await render(a.page, { title: long, titleBleed: false, titleRotate: "none", titleStyle: "solid", titleWrap: false }, 600);
+  assert.ok(oneLine.boxes.title.h < boxes.title.h / 2, "titleWrap: false keeps it on one line");
   // a short title stays on one line at full size
   const short = await render(a.page, { title: "WAVE", titleBleed: false, titleRotate: "none", titleStyle: "solid" }, 600);
   assert.ok(short.boxes.title.h < boxes.title.h * 1.5);
