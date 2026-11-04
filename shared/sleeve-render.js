@@ -480,13 +480,14 @@ function grainCanvas() {
   for (let i = 0; i < d.length; i += 4) { const v = 128 + (rnd() - 0.5) * 255; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
   g.putImageData(id, 0, 0); grainTile = c; return c;
 }
-function applyGrain(ctx, W, H, amount, S) {
+/* Rows of tiles starting at from <= y < to (all of them by default; a big render does it in two goes). */
+function applyGrain(ctx, W, H, amount, S, from = 0, to = H) {
   if (amount <= 0) return;
   ctx.save();
   ctx.globalCompositeOperation = "overlay";
   ctx.globalAlpha = (amount / 100) * 0.55;
   const tile = grainCanvas(); const n = Math.round(S / 6);
-  for (let y = 0; y < H; y += n) for (let x = 0; x < W; x += n) ctx.drawImage(tile, x, y, n, n);
+  for (let y = 0; y < H; y += n) if (y >= from && y < to) for (let x = 0; x < W; x += n) ctx.drawImage(tile, x, y, n, n);
   ctx.restore();
 }
 function applyVignette(ctx, W, H, state, bg, ink) {
@@ -513,15 +514,37 @@ function patternClip(st, W, H) {
     default: return null;
   }
 }
-function drawPattern(ctx, W, H, st, bg, ink, spot, k, clip, bgOverride) {
+function patternOpts(W, H, st, bg, ink, spot, k, clip, bgOverride) {
   const fg = st.patternColor === "accent" ? spot : ink, fg2 = st.patternColor === "duo" ? (fg === ink ? spot : ink) : fg;
+  return { S: Math.min(W, H), scale: st.patternScale, angle: st.patternAngle, fg, fg2, bg: bgOverride || bg,
+    alpha: Math.min(1, (st.patternAmt / 100) * k), seed: st.patternSeed || 1, unclipped: !clip };
+}
+function drawPattern(ctx, W, H, st, bg, ink, spot, k, clip, bgOverride) {
   ctx.save();
   if (clip) { ctx.beginPath(); clip(ctx); ctx.clip("evenodd"); }
-  try {
-    Patterns.draw(ctx, W, H, st.pattern, { S: Math.min(W, H), scale: st.patternScale, angle: st.patternAngle, fg, fg2, bg: bgOverride || bg,
-      alpha: Math.min(1, (st.patternAmt / 100) * k), seed: st.patternSeed || 1, unclipped: !clip });
-  } catch (e) { console.error(e); }
+  try { Patterns.draw(ctx, W, H, st.pattern, patternOpts(W, H, st, bg, ink, spot, k, clip, bgOverride)); } catch (e) { console.error(e); }
   ctx.restore();
+}
+/* The pattern drawBackdrop will draw (its settings, exactly as it will ask), or null. */
+function backdropPattern(W, H, st, bg, ink, spot, k = 1) {
+  if (!(st.pattern && st.pattern !== "none" && st.patternAmt > 0 && window.Patterns)) return null;
+  if (st.patternArea !== "shape") return patternOpts(W, H, st, bg, ink, spot, k, patternClip(st, W, H));
+  if (!(st.shape && st.shape !== "none" && st.shapeAmt > 0)) return null;
+  const other = (st.shapeColor === "ink" ? ink : spot) === ink ? spot : ink;
+  return patternOpts(W, H, st, bg, other, other, k / Math.max(0.2, st.patternAmt / 100) * 0.9, null, bg);
+}
+/* Builds (and caches) the backdrop's pattern ahead of drawBackdrop, a step at a time, so a big render can pause
+   in between. */
+async function prepareBackdrop(W, H, st, bg, ink, spot, k, step) {
+  const o = backdropPattern(W, H, st, bg, ink, spot, k);
+  if (!o || !Patterns.steps) return;
+  try { for (const _ of Patterns.steps(W, H, st.pattern, o)) await step(); } catch (e) { console.error(e); }
+}
+/* How far from its centre drawShape (filled) can put ink; Infinity when it may run to the edges. */
+function shapeReach(st, r, S) {
+  const legacy = ["circle", "ring", "square", "half", "bars"].includes(st.shape);
+  if (legacy && !st.shapeRot) return r + 2;   // drawn below, within the r × r box
+  return window.Glyphs && Glyphs.reach ? Glyphs.reach(st.shape, r, Math.max(1, S * 0.006)) : Infinity;
 }
 /* The big shape: the built-in five, or any of shared/glyphs.js's shapes. */
 function drawShape(ctx, st, cx, cy, r, col, a, col2, bg, S) {
@@ -562,12 +585,19 @@ function drawBackdrop(ctx, W, H, st, bg, ink, spot, k = 1) {
     if (hasPattern && st.patternArea === "shape") {
       // the pattern lives inside the shape's silhouette
       shapeAt(col, a);
-      const m = borrow(Math.ceil(W), Math.ceil(H)), mc = m.getContext("2d");
-      drawShape(mc, { ...st, shapeOutline: false }, cx, cy, r, [0, 0, 0], 1, [0, 0, 0], bg, S);
-      mc.globalCompositeOperation = "source-in";
-      drawPattern(mc, W, H, st, bg, col === ink ? spot : ink, col === ink ? spot : ink, k / Math.max(0.2, st.patternAmt / 100) * 0.9, null, bg);
-      ctx.save(); ctx.globalAlpha = Math.min(1, (st.patternAmt / 100) * 1.4); ctx.drawImage(m, 0, 0); ctx.restore();
-      giveBack(m);
+      // The mask need only reach the shape's right and bottom edges (beyond them a sleeve-sized mask is empty, and
+      // laying empty pixels changes nothing). It can't be cropped on the left or top too: the shape drawn shifted
+      // would round its edge points differently and move a few edge pixels by a shade.
+      const R = shapeReach(st, r, S) + 4;
+      const X1 = Math.min(Math.ceil(W), Math.ceil(cx + R)), Y1 = Math.min(Math.ceil(H), Math.ceil(cy + R));
+      if (X1 > 0 && Y1 > 0) {
+        const m = borrow(X1, Y1), mc = m.getContext("2d");
+        drawShape(mc, { ...st, shapeOutline: false }, cx, cy, r, [0, 0, 0], 1, [0, 0, 0], bg, S);
+        mc.globalCompositeOperation = "source-in";
+        drawPattern(mc, W, H, st, bg, col === ink ? spot : ink, col === ink ? spot : ink, k / Math.max(0.2, st.patternAmt / 100) * 0.9, null, bg);   // as backdropPattern
+        ctx.save(); ctx.globalAlpha = Math.min(1, (st.patternAmt / 100) * 1.4); ctx.drawImage(m, 0, 0); ctx.restore();
+        giveBack(m);
+      }
     } else shapeAt(col, a);
   }
   if (st.texture && st.texture !== "none" && st.textureAmt > 0) {
@@ -913,7 +943,7 @@ const TITLE_FX = {
 
 /* ---------- the sleeve ---------- */
 /* Big renders (exports) pause between steps so the page stays responsive; the picture is the same either way. */
-const PAUSE_PX = 1.5e6;
+const PAUSE_PX = 1.5e6, noPause = () => null;
 async function render(canvas, state, image, logo) {
   let words = null;
   try { return await renderSleeve(canvas, state, image, logo, (c) => (words = c)); }
@@ -924,7 +954,7 @@ async function renderSleeve(canvas, state, image, logo, keepWords) {
   const base = canvas.getContext("2d");
   let ctx = base;   // switches to a separate words layer while plates are on (see below)
   await loadFonts(st);
-  const step = canvas.width * canvas.height >= PAUSE_PX ? pause : () => null;
+  const step = canvas.width * canvas.height >= PAUSE_PX ? pause : noPause;
   const boxes = {};
 
   const bg = hexToRgb(st.bg) || [21, 18, 15];
@@ -948,6 +978,7 @@ async function renderSleeve(canvas, state, image, logo, keepWords) {
   }
   await step();
 
+  if (step !== noPause) { await prepareBackdrop(S, S, st, bg, ink, spot, 1, step); await step(); }
   drawBackdrop(ctx, S, S, st, bg, ink, spot);
   await step();
   applyVignette(ctx, S, S, st, bg, ink);
@@ -1178,7 +1209,8 @@ async function renderSleeve(canvas, state, image, logo, keepWords) {
     ctx.drawImage(words, 0, 0);
   }
 
-  applyGrain(ctx, S, S, st.grain, S);
+  if (step === noPause) applyGrain(ctx, S, S, st.grain, S);
+  else { applyGrain(ctx, S, S, st.grain, S, 0, S / 2); await step(); applyGrain(ctx, S, S, st.grain, S, S / 2, S); }
   return boxes;
 }
 

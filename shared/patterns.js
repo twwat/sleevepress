@@ -67,11 +67,21 @@ const layerCache = LRU(LOW_MEMORY ? 4e6 : 16e6);   // desktop: ~11 layers at 120
 const tileCache = LRU(LOW_MEMORY ? 2e6 : 8e6);    // low: preview-sized tiles (<1 Mpx) stay, export-sized ones go
 
 /* ---------- helpers ---------- */
+/* A cached tile; fn(g, tw, th) draws it. fn may be a generator (a build in steps): run straight through here, or,
+   while a pattern is being prepared in steps (P.later), handed back unbuilt and finished by steps(). */
 function tile(P, name, tw, th, fn) {
   tw = Math.max(2, Math.round(tw)); th = Math.max(2, Math.round(th));
   const key = P.tkey + "|" + name + "|" + tw + "x" + th;
   let c = tileCache.get(key);
-  if (!c) { c = makeCanvas(tw, th); fn(c.getContext("2d"), tw, th); tileCache.set(key, c); }
+  if (!c) {
+    c = makeCanvas(tw, th);
+    const run = fn(c.getContext("2d"), tw, th);
+    if (run && typeof run.next === "function") {
+      if (P.later) { P.later.push({ key, c, run }); return c; }
+      while (!run.next().done);
+    }
+    tileCache.set(key, c);
+  }
   return c;
 }
 function fillTile(P, c, ox = 0, oy = 0) {
@@ -1025,15 +1035,19 @@ function contour(F, n, T, th) {
   return path;
 }
 /* A tile built from scalar fields on a periodic grid (gridStep px apart).
-   build(n, R) -> { fields: [Float32Array n*n], layers: [{ f (-1 = solid), th, ink }] } ; after(g, T, R) draws extras on top. */
+   build(n, R) -> { fields: [Float32Array n*n, or a function making one], layers: [{ f (-1 = solid), th, ink }] } ;
+   after(g, T, R) draws extras on top. */
 function fieldTile(P, name, T, gridStep, build, after) {
   T = Math.max(8, Math.round(T));
   const n = clamp(Math.round(T / gridStep), Math.min(48, T >> 1), 240);
-  return tile(P, name, T, T, (g) => {
+  // built in steps (a field, or a layer, at a time) so a big render can pause in between; see tile()
+  return tile(P, name, T, T, function* (g) {
     const R = inks(P), { fields, layers } = build(n, R);
+    for (let i = 0; i < fields.length; i++) if (typeof fields[i] === "function") { fields[i] = fields[i](); yield; }
     for (const ly of layers) {
       if (ly.f < 0) { g.save(); if (ly.ink[4]) { g.globalCompositeOperation = "destination-out"; g.fillStyle = "#000"; } else g.fillStyle = rgba(ly.ink, ly.ink[3]); g.fillRect(0, 0, T, T); g.restore(); continue; }
       inkFill(g, ly.ink, contour(fields[ly.f], n, T, ly.th));
+      yield;
     }
     if (after) after(g, T, R);
   });
@@ -1078,10 +1092,10 @@ function camoWoodland(P) {
   const s0 = seedOf(P), T = P.s * 0.72;
   const c = fieldTile(P, "wood", T, 9, (n, R) => ({
     fields: [
-      fbmGrid(n, s0, { px: 3, py: 4, oct: 4, warp: 0.08 }),
-      fbmGrid(n, s0 + 1, { px: 3, py: 5, oct: 4, warp: 0.1 }),
-      fbmGrid(n, s0 + 2, { px: 4, py: 6, oct: 4, warp: 0.12 }),
-      fbmGrid(n, s0 + 3, { px: 4, py: 7, oct: 3, ridge: 1, warp: 0.15 }),
+      () => fbmGrid(n, s0, { px: 3, py: 4, oct: 4, warp: 0.08 }),
+      () => fbmGrid(n, s0 + 1, { px: 3, py: 5, oct: 4, warp: 0.1 }),
+      () => fbmGrid(n, s0 + 2, { px: 4, py: 6, oct: 4, warp: 0.12 }),
+      () => fbmGrid(n, s0 + 3, { px: 4, py: 7, oct: 3, ridge: 1, warp: 0.15 }),
     ],
     layers: [{ f: 0, th: -0.05, ink: R.h }, { f: 1, th: 0.1, ink: R.a }, { f: 2, th: 0.16, ink: R.A }, { f: 3, th: 0.43, ink: R.D }],
   }));
@@ -1090,7 +1104,7 @@ function camoWoodland(P) {
 function camoDesert(P) {
   const s0 = seedOf(P), T = P.s * 0.8;
   const c = fieldTile(P, "desert", T, 10, (n, R) => ({
-    fields: [fbmGrid(n, s0, { px: 2, py: 3, oct: 3, gain: 0.4, warp: 0.12 }), fbmGrid(n, s0 + 1, { px: 3, py: 4, oct: 3, gain: 0.4, warp: 0.12 })],
+    fields: [() => fbmGrid(n, s0, { px: 2, py: 3, oct: 3, gain: 0.4, warp: 0.12 }), () => fbmGrid(n, s0 + 1, { px: 3, py: 4, oct: 3, gain: 0.4, warp: 0.12 })],
     layers: [{ f: 0, th: -0.08, ink: R.h }, { f: 1, th: 0.12, ink: R.a }],
   }), (g, T, R) => {   // chocolate-chip rocks: dark pebbles with a light chip beside each
     const pts = jitter(9, T, s0 + 9, 0.9), dark = new Path2D(), lite = new Path2D(), r0 = T * 0.012;
@@ -1127,7 +1141,7 @@ function camoDigital(P) {
 function camoTiger(P) {
   const s0 = seedOf(P), T = P.s * 0.7;
   const c = fieldTile(P, "tigercamo", T, 7, (n, R) => ({
-    fields: [fbmGrid(n, s0, { px: 2, py: 9, oct: 4, warp: 0.05, wpx: 3 }), fbmGrid(n, s0 + 1, { px: 3, py: 14, oct: 4, warp: 0.06, wpx: 3 })],
+    fields: [() => fbmGrid(n, s0, { px: 2, py: 9, oct: 4, warp: 0.05, wpx: 3 }), () => fbmGrid(n, s0 + 1, { px: 3, py: 14, oct: 4, warp: 0.06, wpx: 3 })],
     layers: [{ f: 0, th: -0.02, ink: R.a }, { f: 1, th: 0.2, ink: R.D }, { f: 0, th: 0.42, ink: R.A }],
   }));
   fillTile(P, c);
@@ -1159,7 +1173,7 @@ function camoSplinter(P) {
 function camoUrban(P) {
   const s0 = seedOf(P), T = P.s * 0.66;
   const c = fieldTile(P, "urban", T, 8, (n, R) => ({
-    fields: [fbmGrid(n, s0, { px: 3, py: 3, oct: 5, gain: 0.62 }), fbmGrid(n, s0 + 1, { px: 4, py: 4, oct: 5, gain: 0.62 }), fbmGrid(n, s0 + 2, { px: 5, py: 5, oct: 5, gain: 0.65 })],
+    fields: [() => fbmGrid(n, s0, { px: 3, py: 3, oct: 5, gain: 0.62 }), () => fbmGrid(n, s0 + 1, { px: 4, py: 4, oct: 5, gain: 0.62 }), () => fbmGrid(n, s0 + 2, { px: 5, py: 5, oct: 5, gain: 0.65 })],
     layers: [{ f: 0, th: -0.1, ink: R.q }, { f: 0, th: 0.05, ink: R.h }, { f: 1, th: 0.1, ink: R.a }, { f: 2, th: 0.22, ink: R.A }, { f: 1, th: 0.36, ink: R.L }],
   }));
   fillTile(P, c);
@@ -1167,7 +1181,7 @@ function camoUrban(P) {
 function camoMulti(P) {
   const s0 = seedOf(P), T = P.s * 0.8;
   const c = fieldTile(P, "multi", T, 10, (n, R) => ({
-    fields: [fbmGrid(n, s0, { px: 2, py: 3, oct: 3, warp: 0.1 }), fbmGrid(n, s0 + 1, { px: 3, py: 4, oct: 3, warp: 0.1 }), fbmGrid(n, s0 + 2, { px: 8, py: 9, oct: 3, warp: 0.08 }), fbmGrid(n, s0 + 3, { px: 7, py: 10, oct: 3, ridge: 1 }), fbmGrid(n, s0 + 4, { px: 9, py: 8, oct: 3 })],
+    fields: [() => fbmGrid(n, s0, { px: 2, py: 3, oct: 3, warp: 0.1 }), () => fbmGrid(n, s0 + 1, { px: 3, py: 4, oct: 3, warp: 0.1 }), () => fbmGrid(n, s0 + 2, { px: 8, py: 9, oct: 3, warp: 0.08 }), () => fbmGrid(n, s0 + 3, { px: 7, py: 10, oct: 3, ridge: 1 }), () => fbmGrid(n, s0 + 4, { px: 9, py: 8, oct: 3 })],
     layers: [{ f: 0, th: -0.16, ink: R.q }, { f: 0, th: -0.08, ink: R.q }, { f: 0, th: 0.0, ink: R.q }, { f: 0, th: 0.08, ink: R.q }, { f: 1, th: 0.06, ink: R.q }, { f: 1, th: 0.13, ink: R.h },
       { f: 2, th: 0.34, ink: R.A }, { f: 3, th: 0.45, ink: R.B }, { f: 4, th: 0.44, ink: R.L }],
   }));
@@ -1310,7 +1324,7 @@ function dalmatian(P) {
 function cowhide(P) {
   const s0 = seedOf(P), T = P.s * 0.9;
   const c = fieldTile(P, "cow", T, 10, (n, R) => ({
-    fields: [fbmGrid(n, s0, { px: 3, py: 3, oct: 5, gain: 0.5, warp: 0.12 })],
+    fields: [() => fbmGrid(n, s0, { px: 3, py: 3, oct: 5, gain: 0.5, warp: 0.12 })],
     layers: [{ f: 0, th: 0.12, ink: R.A }],
   }));
   fillTile(P, c);
@@ -1417,13 +1431,13 @@ const normCol = (c, d) => Array.isArray(c) && c.length >= 3 ? [c[0] | 0, c[1] | 
 
 /* The drawing state a pattern function gets. With `fills` set, nothing is drawn: fillTile only notes what it
    would fill, and any other drawing touches the missing context and throws (see plan). */
-function makeP(g, W, H, id, S, scale, angle, fg, fg2, bg, seed, fills) {
+function makeP(g, W, H, id, S, scale, angle, fg, fg2, bg, seed, fills, later) {
   const cx = Math.round(W / 2), cy = Math.round(H / 2), ang = angle * Math.PI / 180;
   const R = Math.ceil(Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy))) + 2;
   const ca = Math.cos(-ang), sa = Math.sin(-ang), cb = Math.cos(ang), sb = Math.sin(ang);
   return {
     hx: (W * Math.abs(cb) + H * Math.abs(sb)) / 2 + 2, hy: (W * Math.abs(sb) + H * Math.abs(cb)) / 2 + 2,
-    g, W, H, S, scale, k: scale / 100, s: S * scale / 100, R, ang, cx, cy, fg, fg2, bg, seed, id, fills,
+    g, W, H, S, scale, k: scale / 100, s: S * scale / 100, R, ang, cx, cy, fg, fg2, bg, seed, id, fills, later,
     rnd: (() => { const r = mulberry32(hashStr(id + "#" + seed)); r(); r(); return r; })(),
     tkey: [id, S, scale, fg, fg2, bg, seed].join("|"),
     vis: (x, y, m) => { const X = x * cb - y * sb + cx, Y = x * sb + y * cb + cy; return X > -m && X < W + m && Y > -m && Y < H + m; },
@@ -1440,10 +1454,10 @@ function renderLayer(W, H, id, S, scale, angle, fg, fg2, bg, seed) {
    target at `alpha`. A layer holds exactly the tile's pixels in that case, so the result is the same, minus a
    sleeve-sized canvas and two passes over it. Returns the fill [tile, ox, oy], or null when the pattern needs a layer. */
 const needsLayer = new Set();   // pattern ids that draw more than one tile fill
-function plan(W, H, id, S, scale, fg, fg2, bg, seed) {
-  if (needsLayer.has(id)) return null;
+function plan(W, H, id, S, scale, fg, fg2, bg, seed, later) {
+  if (needsLayer.has(id) && !later) return null;
   const fills = [];
-  try { BY_ID[id](makeP(null, W, H, id, S, scale, 0, fg, fg2, bg, seed, fills)); }
+  try { BY_ID[id](makeP(null, W, H, id, S, scale, 0, fg, fg2, bg, seed, fills, later)); }
   catch (e) { needsLayer.add(id); return null; }
   if (fills.length !== 1) { needsLayer.add(id); return null; }
   return fills[0];
@@ -1481,13 +1495,46 @@ function direct(ctx, W, H, id, S, scale, fg, fg2, bg, seed, alpha) {
   return true;
 }
 
-function draw(ctx, W, H, id, o = {}) {
-  if (!BY_ID[id]) return;
-  W = Math.ceil(W); H = Math.ceil(H); if (!(W > 0 && H > 0)) return;
-  const alpha = clamp(o.alpha == null ? 1 : +o.alpha, 0, 1); if (alpha <= 0) return;
+/* draw's inputs, normalised; null when there is nothing to draw. */
+function inputs(W, H, id, o) {
+  if (!BY_ID[id]) return null;
+  W = Math.ceil(W); H = Math.ceil(H); if (!(W > 0 && H > 0)) return null;
+  const alpha = clamp(o.alpha == null ? 1 : +o.alpha, 0, 1); if (alpha <= 0) return null;
   const S = +o.S > 0 ? +o.S : Math.min(W, H), scale = clamp(+o.scale || 100, 20, 400), angle = +o.angle || 0;
   const fg = normCol(o.fg, [0, 0, 0]), fg2 = normCol(o.fg2, fg), bg = normCol(o.bg, [255, 255, 255]), seed = (o.seed | 0) >>> 0;
-  const key = [id, W, H, S, scale, angle, fg, fg2, bg, seed].join("|");
+  return { W, H, alpha, S, scale, angle, fg, fg2, bg, seed, key: [id, W, H, S, scale, angle, fg, fg2, bg, seed].join("|") };
+}
+/* Does the slow part of draw(ctx, W, H, id, o) ahead of time, in steps: a caller that wants to stay responsive
+   pauses at each one, then draws. Builds the pattern's tile a field or layer at a time (tiles don't depend on the
+   angle), then the layer if draw will need one. Same work, same order as draw would do it, so the same pixels. */
+function* steps(W, H, id, o = {}) {
+  const I = inputs(W, H, id, o); if (!I || layerCache.get(I.key)) return;
+  const later = [], f = plan(I.W, I.H, id, I.S, I.scale, I.fg, I.fg2, I.bg, I.seed, later);
+  for (const job of later) {
+    yield;
+    while (!job.run.next().done) yield;
+    if (tileCache.get(job.key)) release(job.c);   // built meanwhile by someone who couldn't wait
+    else tileCache.set(job.key, job.c);
+  }
+  if (f) { yield; paint(f[0]); }
+  if (f && o.unclipped && !I.angle) return;   // draw lays the tile straight on
+  yield;
+  const layer = renderLayer(I.W, I.H, id, I.S, I.scale, I.angle, I.fg, I.fg2, I.bg, I.seed);
+  layerCache.set(I.key, layer);
+  yield; paint(layer);
+}
+/* The browser only turns a canvas's drawing into pixels when the canvas is first used; using one pixel of it here
+   does that now, in its own step, rather than in the middle of the draw. */
+let painter = null;
+function paint(c) {
+  if (!c.width || !c.height) return;
+  if (!painter) painter = makeCanvas(1, 1).getContext("2d");
+  painter.drawImage(c, 0, 0, 1, 1, 0, 0, 1, 1);
+}
+function prepare(W, H, id, o) { for (const _ of steps(W, H, id, o)); }
+function draw(ctx, W0, H0, id, o = {}) {
+  const I = inputs(W0, H0, id, o); if (!I) return;
+  const { W, H, alpha, S, scale, angle, fg, fg2, bg, seed, key } = I;
   let layer = layerCache.get(key);
   if (!layer && o.unclipped && !angle && pixelAligned(ctx) && direct(ctx, W, H, id, S, scale, fg, fg2, bg, seed, alpha)) return;
   if (!layer) { layer = renderLayer(W, H, id, S, scale, angle, fg, fg2, bg, seed); layerCache.set(key, layer); }
@@ -1495,7 +1542,7 @@ function draw(ctx, W, H, id, o = {}) {
 }
 
 window.Patterns = {
-  LIST, draw, FAMILIES: ["fabric", "plaid", "check", "dots", "lines", "rays", "tile", "organic", "camo", "animal"], LOW_MEMORY, release,
+  LIST, draw, prepare, steps, FAMILIES: ["fabric", "plaid", "check", "dots", "lines", "rays", "tile", "organic", "camo", "animal"], LOW_MEMORY, release,
   clearCache() { layerCache.clear(); tileCache.clear(); motifCache.clear(); },
   /* Lets go of cached canvases beyond the cache budgets (after a big render). */
   trim() { layerCache.trim(); tileCache.trim(); },

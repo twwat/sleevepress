@@ -82,14 +82,20 @@ test("a plain tiled pattern drawn without its layer matches the layer to the pix
       const mask = () => { const g = document.createElement("canvas").getContext("2d"); g.canvas.width = 900; g.canvas.height = 700; g.beginPath(); g.arc(430, 360, 300, 0, 7); g.fill(); g.globalCompositeOperation = "source-in"; return g; };
       const d3 = mask(); Patterns.draw(d3, 900, 700, id, { ...o, unclipped: true });
       const l3 = mask(); Patterns.draw(l3, 900, 700, id, o);
-      out.push({ id, directLayers, plain: same(d, l), moved: same(d2, l2), masked: same(d3, l3) });
+      // built ahead in steps (as a big render does, pausing between them), rotated too: the same as built in one go
+      const rot = { ...o, angle: 30 }, one = ground(900, 700); Patterns.draw(one, 900, 700, id, rot);
+      Patterns.clearCache(); let n = 0; for (const _ of Patterns.steps(900, 700, id, rot)) n++;
+      const stepped = ground(900, 700); Patterns.draw(stepped, 900, 700, id, rot);
+      out.push({ id, directLayers, plain: same(d, l), moved: same(d2, l2), masked: same(d3, l3), stepped: same(one, stepped), n });
     }
     return out;
   });
   for (const x of r) {
     assert.equal(x.directLayers, 0, `${x.id} was laid without a sleeve-sized layer`);
-    assert.deepEqual([x.plain, x.moved, x.masked], [0, 0, 0], `${x.id}: differing values (plain, moved, masked)`);
+    assert.deepEqual([x.plain, x.moved, x.masked, x.stepped], [0, 0, 0, 0], `${x.id}: differing values (plain, moved, masked, stepped)`);
   }
+  // the field-noise camos build a field or a contour layer per step
+  assert.ok(r.find(x => x.id === "multicam").n > 10, "multicam is built in steps");
   await a.close();
 });
 
