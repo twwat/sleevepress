@@ -64,6 +64,13 @@ function centroid(pg) {
 
 /* ---------- scratch canvases ---------- */
 const pool = {};
+/* Frees scratch canvases over `maxPx` pixels (after a big render; they regrow when next needed). Returns the
+   pixels still held. */
+function trim(maxPx) {
+  let held = 0;
+  for (const c of Object.values(pool)) { if (c.width * c.height > maxPx) { c.width = 0; c.height = 0; } held += c.width * c.height; }
+  return held;
+}
 function scratch(name, w, h) {
   let c = pool[name];
   if (!c) c = pool[name] = document.createElement("canvas");
@@ -444,6 +451,14 @@ function drawPort(ctx, id, cx, cy, r, o, col, a, rot) {
   ctx.restore();
 }
 
+/* How far from its centre drawShape(…, r, { lw }) can put ink, at any rotation; Infinity for shapes that run to the
+   edges (rays, wave). Everything drawShape draws lies within its scratch box, r * ext + 2 lw, plus 2 px of rounding. */
+function reach(id, r, lw) {
+  const S = SHAPES_BY[id]; if (!S) return Infinity;
+  if (S.port) return r * Math.SQRT2 + (lw || 0) + 2;
+  const ext = S.ext || 1.12; lw = lw > 0 ? lw : Math.max(1, r * 0.02);
+  return isFinite(ext) ? r * ext + lw * 2 + 4 : Infinity;
+}
 function drawShape(ctx, id, cx, cy, r, o) {
   o = o || {};
   const S = SHAPES_BY[id];
@@ -598,6 +613,6 @@ function drawMark(ctx, id, x, top, w, h, o) {
 window.Glyphs = {
   SHAPES: SHAPE_DEFS.map(({ id, name, family, round }) => ({ id, name, family, round })),
   MARKS: MARK_DEFS.map(({ id, name, round }) => ({ id, name, round })),
-  drawShape, drawMark,
+  drawShape, drawMark, trim, reach,
 };
 })();
