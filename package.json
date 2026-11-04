@@ -1,0 +1,16 @@
+{
+  "name": "sleevepress",
+  "private": true,
+  "description": "Cover art, print pieces and promo images for a release. The app itself needs no build or install; this file only runs the tests.",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"tests/**/*.test.js\"",
+    "test:unit": "node --test \"tests/unit/*.test.js\"",
+    "test:browser": "node --test --test-concurrency=1 \"tests/browser/*.test.js\""
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  },
+  "engines": {
+    "node": ">=22.2"
+  }
+}

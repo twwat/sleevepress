@@ -34,6 +34,23 @@ shared/makers.js            Makers: print pieces and promo designs
 shared/pdf.js               PDF writer and zip writer
 shared/app.js               App: shell, routing, undo, flagging, saving
 shared/view-*.js / .css     one file pair per section
+tests/                      unit and browser tests (see Tests)
+```
+
+## Tests
+
+The app needs no install; the tests do (Node 22.2 or later):
+
+```bash
+npm install
+npm test
+```
+
+`npm run test:unit` runs only the fast Node tests (PDF and zip writers, track parser, record checks). `npm run test:browser` drives the real app in headless Chromium: saving, reloading, backup and restore, import of damaged files, undo, rendering (repeatable output, font loading, long titles, footer contrast), Discover, every section and phone width. Google Fonts requests are answered locally, so the tests run offline.
+
+```
+tests/unit/       node:test, scripts loaded into a vm (load.js)
+tests/browser/    node:test + Playwright (app.js opens the app)
 ```
 
 ## The release record
