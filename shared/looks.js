@@ -798,9 +798,14 @@ function mutate(state, seed, locks = {}, opts = {}) {
 }
 
 // Every face the renderers can use, loaded once per page.
+// `fontsCSS` settles once the stylesheet has arrived (or failed, or 5 s passed): until then the faces aren't declared,
+// and document.fonts.load() would resolve straight away with nothing loaded.
+let fontsCSS = Promise.resolve();
 if (!document.querySelector("link[data-looks-fonts]")) {
-  const l = document.createElement("link"); l.rel = "stylesheet"; l.href = GOOGLE_CSS; l.dataset.looksFonts = "1"; document.head.appendChild(l);
+  const l = document.createElement("link"); l.rel = "stylesheet"; l.href = GOOGLE_CSS; l.dataset.looksFonts = "1";
+  fontsCSS = new Promise(res => { l.onload = l.onerror = () => res(); setTimeout(res, 5000); });
+  document.head.appendChild(l);
 }
 
-window.Looks = { dealer, patternRect, GROUP_KEYS, keepMine, PALETTES, FONTS, FONT, BODY_FONTS, GOOGLE_CSS, LAYOUTS, LAYOUT_KEYS, FRAME_STYLES, MOTIFS, MOODS, FEELS, GROUPS, moodsOf, makePalette, randomize, mutate };
+window.Looks = { fontsCSS, dealer, patternRect, GROUP_KEYS, keepMine, PALETTES, FONTS, FONT, BODY_FONTS, GOOGLE_CSS, LAYOUTS, LAYOUT_KEYS, FRAME_STYLES, MOTIFS, MOODS, FEELS, GROUPS, moodsOf, makePalette, randomize, mutate };
 })();

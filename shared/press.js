@@ -136,8 +136,9 @@ const vault = {
     return new Promise(res => { try { const q = d.transaction("kv").objectStore("kv").get(k); q.onsuccess = () => res(q.result ?? mem.get(k)); q.onerror = () => res(mem.get(k)); } catch (e) { res(mem.get(k)); } });
   },
   async set(k, v) {
-    mem.set(k, v); const d = await idb(); if (!d) { setStatus("memory"); return false; }
-    return new Promise(res => { try { const t = d.transaction("kv", "readwrite"); t.objectStore("kv").put(v, k); t.oncomplete = () => res(true); t.onerror = t.onabort = () => { setStatus("memory"); res(false); }; } catch (e) { setStatus("memory"); res(false); } });
+    mem.set(k, v); const d = await idb(); if (!d) { failed("vault", true); return false; }
+    const done = (ok) => { failed("vault", !ok); return ok; };
+    return new Promise(res => { try { const t = d.transaction("kv", "readwrite"); t.objectStore("kv").put(v, k); t.oncomplete = () => res(done(true)); t.onerror = t.onabort = () => res(done(false)); } catch (e) { res(done(false)); } });
   },
   async del(k) {
     mem.delete(k); const d = await idb(); if (!d) return;
@@ -149,6 +150,9 @@ const vault = {
 let status = "browser";
 const statusListeners = new Set();
 function setStatus(s) { if (s === status) return; status = s; statusListeners.forEach(fn => fn(s)); }
+/* One refused write shouldn't mark the rest of the session as lost: the status follows the latest write of each kind. */
+const failing = { record: false, vault: false };
+function failed(kind, bad) { failing[kind] = bad; setStatus(failing.record || failing.vault ? "memory" : "browser"); }
 
 /* ---------- the release record (one, in memory; written through to the browser) ---------- */
 let db = null;
@@ -159,13 +163,24 @@ function mergeDefaults(saved) {
   for (const k of Object.keys(d)) {
     if (!(k in saved)) continue;
     if (Array.isArray(d[k])) { if (Array.isArray(saved[k])) d[k] = saved[k]; }
-    else if (d[k] && typeof d[k] === "object") { if (saved[k] && typeof saved[k] === "object") d[k] = { ...d[k], ...saved[k] }; }
+    else if (d[k] && typeof d[k] === "object") {
+      const v = saved[k]; if (!v || typeof v !== "object" || Array.isArray(v)) continue;
+      // keys the defaults know keep their type (a null artist would break every view); the rest pass through
+      for (const [kk, vv] of Object.entries(v)) if (!(kk in d[k]) || d[k][kk] === null || typeof vv === typeof d[k][kk]) d[k][kk] = vv;
+    }
     else if (typeof saved[k] === typeof d[k]) d[k] = saved[k];
   }
+  d.tracks = d.tracks.filter(t => t && typeof t === "object").map(t => {
+    const o = { ...t }; for (const f of ["title", "feat", "bpm", "key", "length", "side"]) o[f] = t[f] == null ? "" : String(t[f]);
+    if (!o.side) o.side = "A"; return o;
+  });
+  d.looks = cleanLooks(d.looks);
   if (typeof saved.libId === "string") d.libId = saved.libId;   // which saved release this came from
   if (typeof saved.saved === "number") d.saved = saved.saved;
   return d;
 }
+const cleanLooks = (ls) => (Array.isArray(ls) ? ls : []).filter(l => l && typeof l === "object" && l.look && typeof l.look === "object")
+  .map(l => ({ ...l, name: typeof l.name === "string" ? l.name : "Look" }));
 let fresh = false;   // nothing was stored: a first visit (or storage was cleared)
 /* The demo release older versions started everyone on. Left untouched, it isn't anyone's work: start fresh instead. */
 function oldDemo(r) {
@@ -180,7 +195,7 @@ function load() {
       if (oldDemo(saved)) { db = DEFAULT(); db.looks = Array.isArray(saved.looks) ? saved.looks : []; fresh = true; return db; }
       db = mergeDefaults(saved); fresh = false; return db;
     }
-  } catch (e) { setStatus("memory"); }
+  } catch (e) { failed("record", true); }
   db = DEFAULT(); fresh = true; return db;
 }
 /* Writes are batched; `pending` marks a change that hasn't reached storage yet. */
@@ -190,8 +205,8 @@ function persist() {
   pending = false;
   if (!db || wiped) return;
   db.saved = Date.now();
-  try { localStorage.setItem(KEY, JSON.stringify(db)); vault.del("record"); }
-  catch (e) { vault.set("record", clone(db)).then(ok => { if (!ok) setStatus("memory"); }); }
+  try { localStorage.setItem(KEY, JSON.stringify(db)); vault.del("record"); failed("record", false); }
+  catch (e) { vault.set("record", clone(db)).then(ok => failed("record", !ok)); }
 }
 /* If localStorage was full or refused, the newest copy went to IndexedDB: prefer it when it is newer. */
 async function recoverRecord() {
@@ -200,15 +215,20 @@ async function recoverRecord() {
 }
 function emit(external) { listeners.forEach(fn => { try { fn(db, external); } catch (e) { console.error(e); } }); }
 const get = () => db || load();
-function set(section, value) { get(); db[section] = value; persistSoon(); emit(false); }
-function patch(section, p) { get(); db[section] = { ...db[section], ...p }; persistSoon(); emit(false); }
+/* Edits to these sections are the user's work, so they get undo steps (the app shell installs the hook). Flags,
+   word-tool scratch and the like aren't, and changing them must not clear redo. */
+const UNDOABLE = new Set(["release", "tracks", "print", "typeset", "palette", "sleeve"]);
+let beforeEdit = null;
+const editHook = (section, opts) => { if (beforeEdit && UNDOABLE.has(section) && !(opts && opts.undo === false)) beforeEdit(); };
+function set(section, value, opts) { get(); editHook(section, opts); db[section] = value; persistSoon(); emit(false); }
+function patch(section, p, opts) { get(); editHook(section, opts); db[section] = { ...db[section], ...p }; persistSoon(); emit(false); }
 function replace(record) { db = mergeDefaults(record); persistSoon(); emit(false); }
 function on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 /* Fired when a different release is swapped in (open, import, start blank): undo history must not cross it. */
 const switchFns = new Set();
 const onSwitch = (fn) => { switchFns.add(fn); return () => switchFns.delete(fn); };
 const switched = () => switchFns.forEach(fn => { try { fn(); } catch (e) { console.error(e); } });
-window.addEventListener("storage", (e) => { if (e.key === KEY) { load(); emit(true); } });
+window.addEventListener("storage", (e) => { if (e.key === KEY) { switched(); load(); emit(true); } });
 // Only flush a change that is still waiting. Saving unconditionally here would write the old release straight back
 // after someone clears the site's storage and reloads.
 window.addEventListener("beforeunload", () => { if (db && pending && !wiped) persist(); });
@@ -233,16 +253,23 @@ function asset(name, cap, mime) {
     },
     async data() { await init(); return url; },
     meta: () => meta,
-    async setSource(src, fname) {
-      await init();
-      const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
-      const s = Math.min(1, cap / Math.max(im.naturalWidth, im.naturalHeight));
-      const c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * s); c.height = Math.round(im.naturalHeight * s);
-      c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
-      url = mime === "image/png" ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.88);
-      meta = { name: fname || name, w: im.naturalWidth, h: im.naturalHeight };
-      await vault.set(name, { url, meta }); changed();
+    /* Decodes and sizes a picture without touching what's stored: { url, meta }, or a rejection if it won't decode. */
+    async prepare(src, fname, oldMeta) {
+      const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("bad image")); i.src = src; });
+      const big = Math.max(im.naturalWidth, im.naturalHeight), s = Math.min(1, cap / big);
+      // Already small enough and in the stored format: keep the bytes, so save/open cycles don't re-compress the picture.
+      const keep = s === 1 && typeof src === "string" && src.startsWith("data:" + mime + ";");
+      let u = src;
+      if (!keep) {
+        const c = document.createElement("canvas"); c.width = Math.round(im.naturalWidth * s); c.height = Math.round(im.naturalHeight * s);
+        c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+        u = mime === "image/png" ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.88);
+      }
+      const m = oldMeta && typeof oldMeta === "object" && oldMeta.w ? { ...oldMeta, name: fname || oldMeta.name || name } : { name: fname || name, w: im.naturalWidth, h: im.naturalHeight };
+      return { url: u, meta: m };
     },
+    async put(p) { await init(); url = p ? p.url : null; meta = p ? p.meta : null; if (p) await vault.set(name, { url, meta }); else await vault.del(name); changed(); },
+    async setSource(src, fname, oldMeta) { await api.put(await api.prepare(src, fname, oldMeta)); },
     setFile(file) {
       if (!file || !file.type.startsWith("image/")) { toast("That isn't an image file."); return Promise.resolve(); }
       return new Promise(res => {
@@ -251,7 +278,7 @@ function asset(name, cap, mime) {
         r.readAsDataURL(file);
       });
     },
-    async clear() { await init(); url = null; meta = null; await vault.del(name); changed(); },
+    clear() { return api.put(null); },
     on(fn) { fns.add(fn); return () => fns.delete(fn); },
   };
   return api;
@@ -282,14 +309,29 @@ async function downloadRelease() {
   download(JSON.stringify(o, null, 2), `${safeName(r.catalog || "release")}_release.json`, "application/json");
   toast("Saved release.json");
 }
+/* A picture from a file, decoded ahead of time: { pic } (null = none) or { bad: true } when it won't decode. */
+async function preparePic(target, dataUrl, fname, meta) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) return { pic: null, bad: !!dataUrl };
+  try { return { pic: await target.prepare(dataUrl, typeof fname === "string" ? fname : "", meta) }; } catch (e) { return { pic: null, bad: true }; }
+}
+/* Resolves to { badPicture } so the caller can say a picture was left out. Throws, changing nothing, if it isn't a release. */
 async function importObject(o) {
   if (!o || typeof o !== "object" || typeof o.schema !== "string" || !o.schema.startsWith("sleevepress.release/"))
     throw new Error("not a release file");
+  const next = mergeDefaults(o);
+  const img = await preparePic(cover, o.image && o.image.dataUrl, o.image && o.image.name);
+  const lg = o.logo && o.logo.dataUrl ? await preparePic(logo, o.logo.dataUrl, o.logo.name) : { pic: null };
+  // Everything decoded: only now does the file replace the release on screen.
   const looks = get().looks; switched();
-  db = mergeDefaults(o); db.looks = [...looks, ...db.looks.filter(l => l && l.id && !looks.some(k => k.id === l.id))]; persist();
-  if (o.image && o.image.dataUrl) await cover.setSource(o.image.dataUrl, o.image.name); else await cover.clear();
-  if (o.logo && o.logo.dataUrl) await logo.setSource(o.logo.dataUrl, o.logo.name);
+  next.looks = [...looks, ...next.looks.filter(l => l.id && !looks.some(k => k.id === l.id))];
+  // A file is a copy: even if this browser's library has the release it came from, the two may differ, so it isn't
+  // linked (Save adds it as its own entry rather than quietly claiming "Saved in library").
+  delete next.libId;
+  db = next; persist();
+  await cover.put(img.pic);
+  if (lg.pic) await logo.put(lg.pic);
   emit(false);
+  return { badPicture: img.bad || !!lg.bad };
 }
 function readJSON(file) {
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => { try { res(JSON.parse(r.result)); } catch (e) { rej(e); } }; r.onerror = rej; r.readAsText(file); });
@@ -298,7 +340,7 @@ async function importFile(file) {
   try {
     const o = await readJSON(file);
     if (o && o.schema === LIB_SCHEMA) { const n = await library.restore(o); toast(`Restored ${n} saved release${n === 1 ? "" : "s"} and your flagged looks`); return "library"; }
-    await importObject(o); toast("Release loaded"); return "release";
+    const r = await importObject(o); toast(r.badPicture ? "Release loaded, but its picture couldn't be read" : "Release loaded"); return "release";
   } catch (e) { toast("That isn't a Sleeve Press file."); return null; }
 }
 /* A new release: the default words (or `words`), the current look kept unless `freshLook`, no picture, no tracks. */
@@ -322,50 +364,75 @@ let wiped = false;
 /* ---------- the library: saved releases (with their pictures) ---------- */
 const LIB_SCHEMA = "sleevepress.library/1";
 const libListeners = new Set();
+/* Library writes run one at a time: each reads the index, changes it and writes it back, and two overlapping
+   ones (a double Ctrl+S) would otherwise lose an entry. */
+let libChain = Promise.resolve();
+const serial = (fn) => { const run = libChain.then(fn); libChain = run.catch(() => {}); return run; };
+/* A thumbnail is our own JPEG; anything else (a remote URL in a hand-edited backup) isn't fetched. */
+const ownThumb = (t) => typeof t === "string" && t.startsWith("data:image/") ? t : null;
+let askedPersist = false;
+/* Asks the browser not to clear the library under storage pressure (Safari otherwise may, after a week unused). */
+function keepStorage() {
+  if (askedPersist) return; askedPersist = true;
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).catch(() => {}); } catch (e) {}
+}
 const library = {
-  async list() { return (await vault.get("lib.index")) || []; },
+  async list() { const v = await vault.get("lib.index"); return Array.isArray(v) ? v.filter(e => e && typeof e.id === "string") : []; },
   on(fn) { libListeners.add(fn); return () => libListeners.delete(fn); },
   changed() { libListeners.forEach(fn => fn()); },
-  /* Saves the current release. Same id as the one it was opened from = overwrite. */
-  async save(thumbUrl, asNew) {
+  /* Saves the current release. Same id as the one it was opened from = overwrite. Resolves to the id, or null if the
+     browser refused the write (nothing in the library changes then). */
+  save(thumbUrl, asNew) { return serial(async () => {
     const rec = clone(get()); let id = !asNew && rec.libId;
     const idx = await library.list(), prev = id && idx.find(e => e.id === id);
-    if (!id || !idx.some(e => e.id === id)) { id = "r" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36); }
-    rec.libId = id; db.libId = id; persistSoon();
+    if (!id || !prev) { id = "r" + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36); }
+    rec.libId = id;
     const auto = [rec.release.artist, titleLine(rec.release)].filter(Boolean).join(" — ") || "Untitled";
     const entry = { id, name: prev && prev.custom ? prev.name : auto, custom: !!(prev && prev.custom), catalog: rec.release.catalog, updated: Date.now(), thumb: thumbUrl || null };
-    await vault.set("lib." + id, { record: rec, image: await cover.data(), imageMeta: cover.meta() });
-    const next = [entry, ...idx.filter(e => e.id !== id)];
-    await vault.set("lib.index", next); library.changed();
+    if (!(await vault.set("lib." + id, { record: rec, image: await cover.data(), imageMeta: cover.meta() }))) { if (!prev) mem.delete("lib." + id); return null; }
+    if (!(await vault.set("lib.index", [entry, ...idx.filter(e => e.id !== id)]))) { if (!prev) { mem.delete("lib." + id); vault.del("lib." + id); } return null; }
+    db.libId = id; persistSoon(); library.changed(); keepStorage();
     return id;
-  },
+  }); },
+  /* Reads the saved release and its picture first; the one on screen is only replaced once both are good. */
   async open(id) {
-    const e = await vault.get("lib." + id); if (!e) return false;
+    const e = await vault.get("lib." + id); if (!e || !e.record) return false;
+    const next = mergeDefaults(e.record);
+    const img = await preparePic(cover, e.image, e.imageMeta && e.imageMeta.name, e.imageMeta);
     switched();
-    const looks = get().looks; db = mergeDefaults(e.record); db.looks = looks; db.libId = id; persist();
-    if (e.image) await cover.setSource(e.image, e.imageMeta && e.imageMeta.name); else await cover.clear();
-    emit(false); return true;
+    next.looks = get().looks; next.libId = id; db = next; persist();
+    await cover.put(img.pic);
+    emit(false);
+    return img.bad ? "nopicture" : true;   // truthy either way; "nopicture" = opened, but its picture wouldn't decode
   },
-  async remove(id) { await vault.del("lib." + id); await vault.set("lib.index", (await library.list()).filter(e => e.id !== id)); library.changed(); },
-  async rename(id, name) { await vault.set("lib.index", (await library.list()).map(e => e.id === id ? { ...e, name, custom: true } : e)); library.changed(); },
+  remove(id) { return serial(async () => { await vault.del("lib." + id); await vault.set("lib.index", (await library.list()).filter(e => e.id !== id)); library.changed(); }); },
+  rename(id, name) { return serial(async () => { await vault.set("lib.index", (await library.list()).map(e => e.id === id ? { ...e, name, custom: true } : e)); library.changed(); }); },
   async records() { const out = []; for (const e of await library.list()) { const r = await vault.get("lib." + e.id); if (r) out.push({ entry: e, ...r }); } return out; },
   async backup() {
     const o = { schema: LIB_SCHEMA, exported: new Date().toISOString(), looks: get().looks, label: get().release.label, logo: await logo.data(), releases: await library.records() };
     download(JSON.stringify(o), `sleevepress_library_${new Date().toISOString().slice(0, 10)}.json`, "application/json");
   },
-  async restore(o) {
+  /* Adds a backup's releases, flags, logo and label name. Entries that don't hold together are skipped, not fatal. */
+  restore(o) { return serial(async () => {
     const idx = await library.list(); let n = 0;
-    for (const r of o.releases || []) {
-      if (!r.entry || !r.record) continue;
-      await vault.set("lib." + r.entry.id, { record: r.record, image: r.image || null, imageMeta: r.imageMeta || null });
-      idx.splice(0, idx.length, ...[r.entry, ...idx.filter(e => e.id !== r.entry.id)]); n++;
+    for (const r of Array.isArray(o.releases) ? o.releases : []) {
+      if (!r || !r.entry || typeof r.entry.id !== "string" || !r.record || typeof r.record !== "object") continue;
+      const rec = mergeDefaults(r.record); rec.libId = r.entry.id;
+      const entry = { id: r.entry.id, name: typeof r.entry.name === "string" && r.entry.name ? r.entry.name : (titleLine(rec.release) || "Untitled"),
+        custom: !!r.entry.custom, catalog: rec.release.catalog, updated: typeof r.entry.updated === "number" ? r.entry.updated : Date.now(), thumb: ownThumb(r.entry.thumb) };
+      const image = typeof r.image === "string" && r.image.startsWith("data:image/") ? r.image : null;
+      if (!(await vault.set("lib." + entry.id, { record: rec, image, imageMeta: image && r.imageMeta && typeof r.imageMeta === "object" ? r.imageMeta : null }))) continue;
+      idx.splice(0, idx.length, ...[entry, ...idx.filter(e => e.id !== entry.id)]); n++;
     }
     await vault.set("lib.index", idx);
     const have = new Set(get().looks.map(l => l.id));
-    set("looks", [...get().looks, ...(o.looks || []).filter(l => !have.has(l.id))]);
-    if (o.logo) await logo.setSource(o.logo, "logo");
+    set("looks", [...get().looks, ...cleanLooks(o.looks).filter(l => l.id && !have.has(l.id))]);
+    // the label name: fill it in where this release still has the built-in one (or none), never over the user's own
+    const cur = get().release.label;
+    if (typeof o.label === "string" && o.label.trim() && (!cur || cur === BUILTIN_WORDS.label)) patch("release", { label: o.label });
+    if (typeof o.logo === "string" && o.logo.startsWith("data:image/")) { try { await logo.setSource(o.logo, "logo"); } catch (e) {} }
     library.changed(); return n;
-  },
+  }); },
 };
 
 /* ---------- tracks ---------- */
@@ -455,7 +522,7 @@ window.SP = {
   status: () => status, onStatus: (fn) => { statusListeners.add(fn); return () => statusListeners.delete(fn); },
   hexToRgb, rgbToHex, rgba, lum, relLum, contrast, rgbToHsl, hslToRgb, rgbToLab, labDist,
   safeName, mulberry32, hashStr, clone, toast, download, copy, canvasBlob, debounce, rafOnce, bindSeg,
-  get, set, patch, on, reset,
+  get, set, patch, on, reset, onBeforeEdit: (fn) => { beforeEdit = fn; },
   exportObject, downloadRelease, importFile, importObject,
   parseTracks, tracksToText, secs, fmtTime, runtime, titleLine,
 };

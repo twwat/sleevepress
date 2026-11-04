@@ -123,7 +123,7 @@ App.view("library", {
       const ok = await SP.library.open(e.id);
       if (!ok) { SP.toast("Couldn't find that saved release."); return false; }
       markClean(); baseline.ts = e.updated;
-      if (then) await then(); else SP.toast(`Opened ${e.name}`);
+      if (then) await then(); else App.openedToast(ok, e.name);
       refreshAll(); return true;
     }
     function drawSaved() {
@@ -146,7 +146,7 @@ App.view("library", {
           h("div", { class: "lb-acts" },
             h("button", { type: "button", class: "btn small", "data-act": "open", onclick: () => openEntry(e) }, "Open"),
             h("button", { type: "button", class: "btn small", "data-act": "rename", onclick: () => inlineRename(name, e.name, n => SP.library.rename(e.id, n)) }, "Rename"),
-            h("button", { type: "button", class: "btn small", "data-act": "dup", onclick: () => openEntry(e, async () => { const id = await App.saveToLibrary(true); await SP.library.rename(id, e.name + " (copy)"); }) }, "Duplicate"),
+            h("button", { type: "button", class: "btn small", "data-act": "dup", onclick: () => openEntry(e, async () => { const id = await App.saveToLibrary(true); if (id) await SP.library.rename(id, e.name + " (copy)"); }) }, "Duplicate"),
             h("button", { type: "button", class: "btn small lb-del", "data-act": "delete", "aria-label": "Delete " + e.name, onclick: async () => {
               if (!confirm(`Delete “${e.name}” from your library? This can't be undone.`)) return;
               await SP.library.remove(e.id);

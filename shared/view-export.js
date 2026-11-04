@@ -99,7 +99,7 @@ function picked() {
   const p = SP.get().promo && SP.get().promo.picked;
   return new Set(Array.isArray(p) ? p : OUTS.filter(o => !DEFAULT_OFF.has(o.id)).map(o => o.id));
 }
-function setPicked(set) { SP.patch("promo", { picked: OUTS.map(o => o.id).filter(id => set.has(id)) }); }
+function setPicked(set) { SP.patch("promo", { picked: OUTS.map(o => o.id).filter(id => set.has(id)) }, { undo: false }); }
 
 /* ---------- view ---------- */
 let root = null, visible = false, cards = new Map(), zipBtn = null, countOut = null, checksEl = null, fields = {};

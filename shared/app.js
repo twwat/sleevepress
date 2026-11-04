@@ -23,6 +23,7 @@ function undo() { if (!past.length) return; future.push(SP.clone(SP.get())); res
 function redo() { if (!future.length) return; past.push(SP.clone(SP.get())); restore(future.pop()); lastPush = 0; updateUndo(); }
 function clearHistory() { past.length = 0; future.length = 0; lastPush = 0; updateUndo(); }
 SP.onSwitch(clearHistory);
+SP.onBeforeEdit(() => checkpoint());   // tracklist, print settings, promo words: undoable like edits on the cover
 const undoFns = new Set();
 function updateUndo() { undoFns.forEach(fn => fn(past.length, future.length)); }
 
@@ -87,12 +88,22 @@ async function thumb(canvasOrSize, st) {
 async function env() { return Makers.env(SP.get(), await SP.cover.image(), await SP.logo.image()); }
 
 /* ---------- saving ---------- */
-async function saveToLibrary(asNew) {
-  const c = await thumb(320);
-  const id = await SP.library.save(c.toDataURL("image/jpeg", 0.82), asNew); markSaved();
-  SP.toast(asNew ? "Saved as a new release in your library" : "Saved to your library");
-  return id;
+/* One save at a time: a second Ctrl+S while one is running gets the same result instead of a duplicate entry.
+   Resolves to the library id, or null if the browser wouldn't store it (the user is told, nothing is marked saved). */
+let saving = null;
+function saveToLibrary(asNew) {
+  if (saving) return saving;
+  saving = (async () => {
+    const c = await thumb(320);
+    const id = await SP.library.save(c.toDataURL("image/jpeg", 0.82), asNew);
+    if (!id) { SP.toast("Couldn't save: this browser's storage is full or blocked. Use ⚙ → Back up everything to keep a copy."); return null; }
+    markSaved();
+    SP.toast(asNew ? "Saved as a new release in your library" : "Saved to your library");
+    return id;
+  })().finally(() => { saving = null; });
+  return saving;
 }
+const openedToast = (r, name) => SP.toast(r === "nopicture" ? "Opened, but its picture couldn't be read" : name ? `Opened ${name}` : "Opened");
 /* Starts the next release in a series: same look and label, next catalogue number, words cleared. */
 function nextRelease() {
   clearHistory();
@@ -239,7 +250,7 @@ async function newRelease() {
   };
   if (!unsaved()) return go2();
   modal({ title: "Keep this release?", body: h("p", {}, "This release isn't saved in your library yet. Save a copy before starting a new one?"),
-    actions: [{ label: "Cancel" }, { label: "Don't save" , onclick: () => { setTimeout(go2, 0); } }, { label: "Save, then new", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(go2, 0); } }] });
+    actions: [{ label: "Cancel" }, { label: "Don't save" , onclick: () => { setTimeout(go2, 0); } }, { label: "Save, then new", primary: true, onclick: async () => { if (await saveToLibrary()) setTimeout(go2, 0); } }] });
 }
 function openFile() {
   const pick = () => {
@@ -249,13 +260,13 @@ function openFile() {
   };
   if (!unsaved()) return pick();
   modal({ title: "Open a file?", body: h("p", {}, "A release file replaces the one you're on, which has changes that aren't in your library. (A backup file only adds to your library.)"),
-    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: () => { setTimeout(pick, 0); } }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); setTimeout(pick, 0); } }] });
+    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: () => { setTimeout(pick, 0); } }, { label: "Save, then open", primary: true, onclick: async () => { if (await saveToLibrary()) setTimeout(pick, 0); } }] });
 }
 async function openSaved(id) {
-  const doOpen = async () => { if (await SP.library.open(id)) { markSaved(); go("design"); SP.toast("Opened"); } };
+  const doOpen = async () => { const r = await SP.library.open(id); if (r) { markSaved(); go("design"); openedToast(r); } else SP.toast("Couldn't find that saved release."); };
   if (!unsaved()) return doOpen();
   modal({ title: "Open another release?", body: h("p", {}, "The release you're on has changes that aren't in your library."),
-    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: doOpen }, { label: "Save, then open", primary: true, onclick: async () => { await saveToLibrary(); await doOpen(); } }] });
+    actions: [{ label: "Cancel" }, { label: "Open without saving", onclick: doOpen }, { label: "Save, then open", primary: true, onclick: async () => { if (await saveToLibrary()) await doOpen(); } }] });
 }
 function editDefaults() {
   const form = wordsForm(ownDefaults());
@@ -359,7 +370,7 @@ function mountBar() {
     const mod = e.ctrlKey || e.metaKey; if (!mod) return;
     const a = document.activeElement;
     const typing = !!a && (a.tagName === "TEXTAREA" || a.isContentEditable || (a.tagName === "INPUT" && /^(text|search|number|email|url|tel|password)$/i.test(a.type)));
-    if (e.key.toLowerCase() === "s") { e.preventDefault(); saveToLibrary(); }
+    if (e.key.toLowerCase() === "s") { e.preventDefault(); if (!e.repeat) saveToLibrary(); }
     else if (e.key.toLowerCase() === "z" && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (e.key.toLowerCase() === "y" && !typing) { e.preventDefault(); redo(); }
   });
@@ -421,5 +432,5 @@ function start() {
 }
 
 window.App = { modal, menu, newRelease, openFile, openSaved, editDefaults, resetEverything, unsaved, markSaved, completeLook, state, commit, applyLook, checkpoint, undo, redo, view, go, start, lookId, flagged, isFlagged, flag, unflag, toggleFlag,
-  smallImage, thumb, env, saveToLibrary, nextRelease, h, lazy, queue, current: () => current };
+  smallImage, thumb, env, saveToLibrary, openedToast, nextRelease, h, lazy, queue, current: () => current };
 })();

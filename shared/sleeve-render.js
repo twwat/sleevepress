@@ -61,11 +61,21 @@ const lookOf = (st) => { const o = {}; for (const k of LOOK_KEYS) o[k] = st[k]; 
 /* ---------- fonts ---------- */
 const fontReady = {};
 const fontInfo = (face) => (window.Looks && Looks.FONT[face]) || { n: face, w: [600, 700] };
-function loadFont(face) {
-  if (!fontReady[face]) fontReady[face] = Promise.all(fontInfo(face).w.map(w => document.fonts.load(`${w} 100px "${face}"`))).catch(() => {});
-  return fontReady[face];
+/* Waits for the stylesheet first, and only remembers a load that worked, so a slow connection can't leave a face
+   on the fallback for the rest of the session. `text` pulls in the files for letters beyond basic Latin. */
+function loadFont(face, text) {
+  const specs = fontInfo(face).w.map(w => `${w} 100px "${face}"`);
+  if (!fontReady[face]) {
+    fontReady[face] = Promise.resolve(window.Looks && Looks.fontsCSS).then(() => Promise.all(specs.map(f => document.fonts.load(f))))
+      .then(() => { if (!specs.every(f => document.fonts.check(f))) delete fontReady[face]; }, () => { delete fontReady[face]; });
+  }
+  const p = fontReady[face];
+  // Letters outside basic Latin live in their own font files; asking with the text fetches them (instant once loaded).
+  if (!text || !/[^\x00-\x7f]/.test(text)) return p;
+  return p.then(() => Promise.all(specs.map(f => document.fonts.load(f, text))).catch(() => {}));
 }
-const loadFonts = (st) => Promise.all([loadFont(st.font), loadFont(st.bodyFont || st.font), loadFont(st.artistFont || st.bodyFont || st.font)]);
+const wordsOf = (st) => [st.artist, st.title, st.footer, st.catalog, st.year, st.label, st.plateText].filter(Boolean).join(" ");
+const loadFonts = (st) => { const t = wordsOf(st); return Promise.all([loadFont(st.font, t), loadFont(st.bodyFont || st.font, t), loadFont(st.artistFont || st.bodyFont || st.font, t)]); };
 /* Nearest weight the face actually has, so the browser never fakes a bold. */
 function weightFor(face, want) {
   const ws = fontInfo(face).w; want = Number(want);
