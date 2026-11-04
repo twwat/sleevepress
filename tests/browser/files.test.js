@@ -138,6 +138,30 @@ test("file names keep accented letters as plain ones", { skip }, async () => {
   await a.close();
 });
 
+test("print preview: a safe area 3 mm inside every cut, drawn on the preview but never in the PDF", { skip }, async () => {
+  const a = await open();
+  await release(a);
+  const L = await a.page.evaluate(() => PrintSheet.layout({ pieces: { booklet: { on: true, n: 1 }, disc: { on: true, n: 1 } }, discD: 117, discHole: 41 }));
+  const safe = L.pages.flatMap(p => p.ops).filter(op => op.t === "safe");
+  const rect = safe.find(op => !op.r), round = safe.find(op => op.r);
+  assert.deepEqual([rect.w, rect.h], [114, 114]);
+  assert.deepEqual([round.r, round.hr], [117 / 2 - 3, 41 / 2 + 3]);
+
+  await a.page.evaluate(() => { location.hash = "#print"; });
+  await a.page.waitForFunction(() => /page 1 of/.test(document.querySelector("#pr-pageinfo").textContent));
+  assert.equal(await a.page.locator("#pr-safe").isChecked(), true);
+  assert.equal(await a.page.locator("#pr-safenote").isVisible(), true);
+  await a.page.locator("#pr-safe").uncheck();
+  await a.page.waitForFunction(() => document.querySelector("#pr-safenote").hidden);
+  assert.equal(await a.page.evaluate(() => SP.get().print.safe), false);
+
+  // the PDF only ever strokes in grey: no colour operator from the blue preview line
+  const buf = await blobOf(a.page, async () => (await PrintSheet.buildPdf({ safe: true, pieces: { booklet: { on: true, n: 1 } } })).blob);
+  assert.doesNotMatch(buf.toString("latin1"), / RG\b/);
+  assert.deepEqual(a.errors, []);
+  await a.close();
+});
+
 test("print PDF: document properties name the release, and the xref still lines up", { skip }, async () => {
   const a = await open();
   await release(a);
