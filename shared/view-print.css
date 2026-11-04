@@ -52,3 +52,5 @@
 .view-print .pr-warn { font-size: 12px; color: var(--warn); border: 1px solid var(--warn); padding: 8px 10px; }
 .view-print .pr-note b { color: var(--chalk-dim); }
 .view-print .pr-tracks textarea { min-height: 140px; }
+.view-print .pr-safenote { margin: 0; }
+.view-print .pr-safenote i { display: inline-block; width: 18px; height: 0; border-top: 2px dashed rgb(0, 150, 220); vertical-align: middle; margin-right: 8px; }

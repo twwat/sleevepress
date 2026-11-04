@@ -4,8 +4,11 @@
 "use strict";
 const SR = SleeveRender, TR = TracklistRender, h = App.h;
 
-const cat = () => SP.safeName(SP.get().release.catalog || "release");
-const st = () => App.state();
+/* File names keep to plain letters, so "Björk" becomes "Bjork" rather than "Bj_rk". */
+const LETTERS = { "ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "þ": "th", "Þ": "TH" };
+const plain = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[ßæÆœŒøØłŁđĐþÞ]/g, (c) => LETTERS[c]);
+const cat = () => SP.safeName(plain(SP.get().release.catalog)) || "release";
+const st = () => { const s = { ...App.state() }; for (const k of ["catalog", "artist", "title"]) s[k] = plain(s[k]); return s; };
 const enc = (t) => new TextEncoder().encode(t);
 const textBlob = (t, mime = "text/plain") => new Blob([t], { type: mime + ";charset=utf-8" });
 
@@ -31,18 +34,83 @@ function youtubeText() {
   return [...top, ...(ch.length ? ["", ...ch] : []), ...(foot ? ["", foot] : [])].join("\n") + "\n";
 }
 const timed = () => { const t = SP.get().tracks; return t.length > 0 && t.every(x => SP.secs(x.length)); };
+/* Everything a distributor's upload form asks for, in one place to copy from. */
+function infoText() {
+  const d = SP.get(), r = d.release, t = d.tracks, title = SP.titleLine(r), rt = SP.runtime(t), owner = (r.label || r.artist || "").trim();
+  const rows = [
+    ["Artist", r.artist], ["Title", title], ["Format", r.format], ["Record label", r.label], ["Catalogue no.", r.catalog],
+    ["Release date", r.date], ["Year", r.year],
+    ["℗ line", r.year && owner ? `℗ ${r.year} ${owner}` : ""], ["© line", r.year && owner ? `© ${r.year} ${owner}` : ""],
+    ["Tracks", t.length ? `${t.length}${rt ? ` · ${SP.fmtTime(rt)} total` : ""}` : ""],
+  ].filter(([, v]) => v && String(v).trim());
+  const w = Math.max(...rows.map(([k]) => k.length)) + 2;
+  const out = [[r.artist, title].filter(Boolean).join(" — ") || "Release info", "", ...rows.map(([k, v]) => `${(k + ":").padEnd(w)}${String(v).trim()}`)];
+  if (t.length) {
+    out.push("", "TRACKS");
+    t.forEach((x, i) => {
+      const bits = [x.feat ? `feat. ${x.feat}` : "", x.length, x.bpm ? `${x.bpm} BPM` : "", x.key].filter(Boolean);
+      out.push(`${String(i + 1).padStart(2, "0")}  ${x.title}${bits.length ? "  ·  " + bits.join("  ·  ") : ""}`);
+    });
+    if (t.some(x => x.feat)) out.push("", "Distributors usually want featured artists in their own field, not in the track title.");
+  }
+  return out.join("\n") + "\n";
+}
+
+/* ---------- store check: words on the cover that streaming stores turn down ---------- */
+const MONTH = "jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?";
+const STORE_RULES = [
+  // artist and title are only checked for addresses and handles: a song can be called "Tidal" or "Friday 13"
+  { what: "a web address", all: true, re: /\bhttps?:\/\/\S+|\bwww\.\S+|\b[a-z0-9][a-z0-9-]*(\.[a-z0-9-]+)*\.(com|net|org|io|co|fm|me|app|link|ly|to|ee|music|xyz|info|tv|uk)\b(\/\S*)?/i },
+  { what: "a social handle", all: true, re: /(^|[\s(·|,])@[\w.]{2,}/ },
+  { what: "promo words", re: /\b(out (now|today|soon|this|next)|new (single|album|ep|lp|music|release|record)|available (now|everywhere)|pre-?(save|order)|stream (it )?(now|everywhere)|listen now|coming soon|link in bio|in stores)\b/i },
+  { what: "a release date", re: new RegExp(`\\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(day)?\\b\\.?,?\\s*\\d|\\b\\d{1,2}(st|nd|rd|th)?\\s+(${MONTH})\\b|\\b(${MONTH})\\.?\\s+\\d{1,2}(st|nd|rd|th)?\\b|\\b\\d{1,2}[./]\\d{1,2}[./]\\d{2,4}\\b`, "i") },
+  { what: "a price", re: /[$€£¥]\s?\d|\b\d+([.,]\d\d)?\s?(usd|eur|gbp)\b|\bfree download\b/i },
+  { what: "a store name", re: /\b(spotify|apple music|itunes|amazon music|deezer|tidal|youtube|soundcloud|bandcamp|beatport|pandora|napster|audiomack)\b/i },
+];
+/* The words that actually print on the front cover, by where they sit. */
+function coverWords(d) {
+  const r = d.release, s = SR.flatten(d), out = [];
+  const add = (name, text, strict) => { const t = String(text || "").replace(/\s*\n\s*/g, " ").trim(); if (t) out.push({ name, text: t, strict }); };
+  add("Artist", r.artist, false);
+  add("Title", r.title, false);
+  add("Footer", r.footer, true);
+  if (["text", "box", "stamp"].includes(s.labelMark)) add("Label mark", r.label, true);
+  if (s.plate) add("Plate", (s.plateText || "").trim() || r.catalog, true);
+  return out;
+}
+/* [{ name, what, match }] for every cover word a store would likely reject. */
+function storeIssues(d) {
+  const out = [];
+  for (const w of coverWords(d)) for (const rule of STORE_RULES) {
+    if (!w.strict && !rule.all) continue;
+    const m = rule.re.exec(w.text);
+    if (m) out.push({ name: w.name, what: rule.what, match: m[0].replace(/^[\s(·|,]+/, "").trim() });
+  }
+  return out;
+}
+const SIZE_CAP = 10 * 1024 * 1024;   // a common distributor upload limit for artwork
 
 /* ---------- the outputs ---------- */
 async function env(preview) {
   return Makers.env(SP.get(), preview ? await App.smallImage() : await SP.cover.image(), await SP.logo.image());
 }
 const png = async (c) => SP.canvasBlob(c);
+/* The 3000 px cover is drawn once per zip and shared by the PNG and the JPEG. */
+let shared = null, pngBytes = null;
+async function bigCover() {
+  if (shared && shared.cover) return shared.cover;
+  const c = await Makers.cover(await env(), 3000);
+  if (shared) shared.cover = c;
+  return c;
+}
 const sq = (n) => `${n} × ${n} px PNG`;
 const backDims = (n) => { const [w, hh] = TR.dims(TR.settings(SP.get()).layout, n); return `${w} × ${hh} px PNG`; };
 
 const OUTS = [
   { id: "cover3000", group: "stream", label: "Cover, 3000 px", use: "The main artwork for your distributor (DistroKid, TuneCore, CD Baby…).", dims: () => sq(3000),
-    preview: async (e, c) => Makers.cover(e, 520), files: async () => [[SR.filename(st(), 3000), await png(await Makers.cover(await env(), 3000))]] },
+    preview: async (e, c) => Makers.cover(e, 520), files: async () => { const ver = picVer, sig = sigs().img, b = await png(await bigCover()); pngBytes = { size: b.size, sig, ver }; return [[SR.filename(st(), 3000), b]]; } },
+  { id: "cover3000jpg", group: "stream", label: "Cover, 3000 px JPEG", use: "The same cover as a much smaller file, for distributors that cap upload size.", dims: () => "3000 × 3000 px JPEG",
+    preview: async (e) => Makers.cover(e, 520), files: async () => [[SR.filename(st(), 3000).replace(/\.png$/, ".jpg"), await SP.canvasBlob(await bigCover(), "image/jpeg", 0.92)]] },
   { id: "cover1400", group: "stream", label: "Cover, 1400 px", use: "For distributors, stores or podcast hosts that cap artwork size.", dims: () => sq(1400),
     preview: async (e) => Makers.cover(e, 520), files: async () => [[SR.filename(st(), 1400), await png(await Makers.cover(await env(), 1400))]] },
   { id: "back3000", group: "stream", label: "Back cover", use: "Extra image on Bandcamp, or the back of a physical release.", dims: () => backDims(3000),
@@ -54,6 +122,8 @@ const OUTS = [
     files: async () => [[SR.filename(st(), `${p.w}x${p.h}`, p.id), await png(await Makers.promo(await env(), p.id))]],
   })),
 
+  { id: "info", group: "text", label: "Release info (.txt)", use: "Artist, title, label, ℗ line and every track in one place, to copy into your distributor's upload form.", dims: () => "Plain text",
+    text: infoText, name: () => `${cat()}_release_info.txt` },
   { id: "tracklist-txt", group: "text", label: "Tracklist (.txt)", use: "Paste into Bandcamp, SoundCloud or a press email.", dims: () => "Plain text",
     text: () => TR.toText(SP.get(), "plain"), name: () => `${cat()}_tracklist.txt`, needs: "tracks" },
   { id: "tracklist-md", group: "text", label: "Tracklist (.md)", use: "A table for a README, Notion page or blog post.", dims: () => "Markdown",
@@ -81,6 +151,8 @@ const GROUPS = [
   { id: "extras", title: "Artwork extras", sub: "Less common pieces." },
 ];
 const DEFAULT_OFF = new Set(["vinyl", "tracklist-md", "tracklist-csv"]);
+/* Folders inside the zip, one per group, so release day starts with "upload what's in Streaming". */
+const FOLDERS = { stream: "Streaming", promo: "Promo", text: "Text", extras: "Extras" };
 
 /* Why an output can't be made right now (or ""). */
 function missing(o) {
@@ -95,14 +167,20 @@ async function filesOf(o) {
 }
 
 /* ---------- selection ---------- */
+/* A saved selection only covers the files that existed when it was made: newer ones start at their default. */
+const ADDED_LATER = new Set(["cover3000jpg", "info"]);
 function picked() {
-  const p = SP.get().promo && SP.get().promo.picked;
-  return new Set(Array.isArray(p) ? p : OUTS.filter(o => !DEFAULT_OFF.has(o.id)).map(o => o.id));
+  const pr = SP.get().promo || {}, p = pr.picked;
+  if (!Array.isArray(p)) return new Set(OUTS.filter(o => !DEFAULT_OFF.has(o.id)).map(o => o.id));
+  const known = Array.isArray(pr.known) ? new Set(pr.known) : new Set(OUTS.map(o => o.id).filter(id => !ADDED_LATER.has(id)));
+  const s = new Set(p);
+  for (const o of OUTS) if (!known.has(o.id) && !DEFAULT_OFF.has(o.id)) s.add(o.id);
+  return s;
 }
-function setPicked(set) { SP.patch("promo", { picked: OUTS.map(o => o.id).filter(id => set.has(id)) }, { undo: false }); }
+function setPicked(set) { SP.patch("promo", { picked: OUTS.map(o => o.id).filter(id => set.has(id)), known: OUTS.map(o => o.id) }, { undo: false }); }
 
 /* ---------- view ---------- */
-let root = null, visible = false, cards = new Map(), zipBtn = null, countOut = null, checksEl = null, fields = {};
+let root = null, visible = false, cards = new Map(), zipBtn = null, countOut = null, checksEl = null, storeEl = null, fields = {};
 const q = App.queue(), pending = new Set(), seen = new Set();
 let imgSig = "", textSig = "";
 
@@ -146,6 +224,7 @@ function mount(el) {
     const grid = h("div", { class: "ex-grid ex-grid-" + g.id });
     const sec = h("section", { class: "ex-group", id: "ex-g-" + g.id, "aria-labelledby": "ex-h-" + g.id },
       h("div", { class: "ex-ghead" }, h("h2", { id: "ex-h-" + g.id }, g.title), h("p", {}, g.sub)));
+    if (g.id === "stream") sec.append(storeEl = h("div", { class: "ex-store", id: "ex-store", "aria-live": "polite" }));
     if (g.id === "promo") sec.append(copyFields());
     sec.append(grid);
     OUTS.filter(o => o.group === g.id).forEach(o => grid.append(card(o)));
@@ -155,8 +234,8 @@ function mount(el) {
   for (const { o, el: c } of cards.values()) if (o.preview) io.watch(c);
 
   SP.on(() => { if (visible) refresh(); });
-  SP.cover.on(() => { imgSig = ""; if (visible) refresh(); });
-  SP.logo.on(() => { imgSig = ""; if (visible) refresh(); });
+  SP.cover.on(() => { imgSig = ""; picVer++; if (visible) refresh(); });
+  SP.logo.on(() => { imgSig = ""; picVer++; if (visible) refresh(); });
 }
 
 function copyFields() {
@@ -245,45 +324,130 @@ function preflight() {
   add(hasPic, hasPic ? "Picture" : "No picture", hasPic ? "" : "Sleeves will be type only.");
   add(d.tracks.length > 0, d.tracks.length ? `${d.tracks.length} tracks` : "No tracks", d.tracks.length ? "" : "Back cover, story and video still need a tracklist.");
   if (d.tracks.length && !timed()) add(false, "Lengths missing", "Add a length to every track for YouTube timestamps.");
+  const notes = storeNotes(d);
+  add(!notes.length, notes.length ? `Store check: ${notes.length} to fix` : "Store check", notes.length ? "See Store check under Streaming." : "Nothing on the cover that stores usually turn down.");
+  drawStore(notes);
   checksEl.replaceChildren(...out.map(([ok, t, tip]) => h("li", { class: ok ? "ok" : "warn", title: tip || "" }, h("b", { "aria-hidden": "true" }, ok ? "✓" : "!"), t)));
 }
-let hasPic = false;
-async function checkPic() { hasPic = !!(await SP.cover.image()); if (root) preflight(); }
+let hasPic = false, pic = null, picVer = 0;
+async function checkPic() {
+  const im = await SP.cover.image(), m = SP.cover.meta();
+  hasPic = !!im; pic = im ? { w: im.naturalWidth, h: im.naturalHeight, ow: (m && m.w) || im.naturalWidth, oh: (m && m.h) || im.naturalHeight } : null;
+  if (root) preflight();
+}
 SP.cover.on(checkPic);
+
+/* Everything the store check says: cover words, a picture too small for 3000 px, a PNG over the usual size cap. */
+function storeNotes(d) {
+  const by = new Map();
+  for (const i of storeIssues(d)) { const e = by.get(i.name) || { name: i.name, whats: [] }; if (!e.whats.includes(i.what)) e.whats.push(i.what); by.set(i.name, e); }
+  const words = coverWords(d), list = (a) => a.length > 1 ? a.slice(0, -1).join(", ") + " and " + a[a.length - 1] : a[0];
+  const out = [...by.values()].map(e => ({ kind: "words", name: e.name, text: ` has ${list(e.whats)}: “${words.find(w => w.name === e.name).text}”.` }));
+  const s = SR.flatten(d);
+  if (pic && !(s.imgBlur > 0)) {
+    const b = SR.imageBox(s, 3000), k = Math.max(b.w / pic.w, b.h / pic.h) * (s.zoom || 100) / 100;
+    if (k > 2) out.push({ kind: "picture", name: "Picture", text: ` is ${pic.ow} × ${pic.oh} px, stretched ${k.toFixed(1)}× on the 3000 px cover, so it will look soft. Stores can turn down blurry artwork: use a bigger picture if you have one.` });
+  }
+  if (pngBytes && pngBytes.ver === picVer && pngBytes.sig === sigs().img && pngBytes.size > SIZE_CAP)
+    out.push({ kind: "size", name: "Cover PNG", text: ` came out at ${mb(pngBytes.size)}. Some distributors cap artwork at 10 MB: if the upload is refused, use the JPEG.` });
+  return out;
+}
+const mb = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+function drawStore(notes) {
+  if (!storeEl) return;
+  const head = h("h3", {}, h("b", { "aria-hidden": "true" }, notes.length ? "!" : "✓"), "Store check");
+  if (!notes.length) {
+    storeEl.className = "ex-store ok";
+    storeEl.replaceChildren(head, h("p", {}, "Nothing on the cover that stores usually turn down."));
+    return;
+  }
+  storeEl.className = "ex-store warn";
+  const words = notes.some(n => n.kind === "words");
+  storeEl.replaceChildren(head,
+    h("ul", {}, ...notes.map(n => h("li", { "data-kind": n.kind }, h("b", {}, n.name), n.text))),
+    words ? h("p", { class: "hint" }, "Spotify, Apple Music and most stores turn down covers with web addresses, social handles, release dates, prices, promo words like “out now” or other store names. Keep those for the promo images.") : null,
+    notes.some(n => n.kind !== "size") ? h("button", { type: "button", class: "btn small", onclick: () => App.go("design") }, "Edit the cover") : null);
+}
 
 /* ---------- downloads ---------- */
 async function downloadOne(o, btn) {
   const was = btn.textContent; btn.disabled = true; btn.textContent = "Building…";
-  try { for (const [name, blob] of await filesOf(o)) SP.download(blob, name); }
+  try {
+    for (const [name, blob] of await filesOf(o)) SP.download(blob, name);
+    if (o.id === "cover3000") { preflight(); if (pngBytes.size > SIZE_CAP) SP.toast(`That PNG is ${mb(pngBytes.size)}. If your distributor refuses it, use the JPEG.`); }
+  }
   catch (e) { console.error(e); SP.toast("Couldn't build that file."); }
   btn.disabled = false; btn.textContent = was;
+}
+/* What's in the zip and where to use it, in plain words: the first file anyone opens. */
+const FOLDER_NOTES = {
+  stream: "For your distributor. Upload the 3000 px cover; if it's refused for file size, the JPEG is the same picture, smaller.",
+  promo: "For socials, YouTube and your header images. Post the teaser before release day and the release post on the day.",
+  text: "Copy and paste into upload forms, store pages and video descriptions.",
+  extras: "Less common pieces.",
+};
+function readme(made, d) {
+  const r = d.release, name = [r.artist, SP.titleLine(r)].filter(Boolean).join(" — ") || "Release";
+  const day = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const out = [name + (r.format ? ` (${r.format})` : ""), [r.catalog, r.label, `made with Sleeve Press, ${day}`].filter(x => x && String(x).trim()).join(" · "), ""];
+  for (const g of GROUPS) {
+    const rows = made.filter(m => m.group === g.id); if (!rows.length) continue;
+    const big = rows.filter(m => /^Cover, 3000 px/.test(m.output)).length;
+    const note = g.id !== "stream" ? FOLDER_NOTES[g.id] : big === 2 ? FOLDER_NOTES.stream : big ? "For your distributor: upload the 3000 px cover." : "For your distributor and store pages.";
+    out.push(`${FOLDERS[g.id]}/`, `  ${note}`, "");
+    for (const m of rows) out.push(`  ${m.name.slice(m.name.lastIndexOf("/") + 1)}  (${mb(m.bytes)})`, `    ${m.use}`);
+    out.push("");
+  }
+  const notes = storeNotes(d);
+  if (notes.length) out.push("Before you upload", ...notes.map(n => `  ! ${n.name}${n.text}`), "");
+  out.push("Print pieces (CD inserts, disc and vinyl labels, stickers) are under Get files → Print in Sleeve Press.",
+    "manifest.json lists every file, for scripts.");
+  return out.join("\n") + "\n";
+}
+/* Builds the release kit: one top folder, a folder per group, README.txt and manifest.json. */
+async function makeZip(sel, step = () => {}) {
+  const top = `${cat()}_release-kit/`, files = [], made = [];
+  shared = {};
+  try {
+    for (let i = 0; i < sel.length; i++) {
+      const o = sel[i];
+      await step(i, sel.length);
+      for (const [name, blob] of await filesOf(o)) {
+        const path = `${top}${FOLDERS[o.group]}/${name}`;
+        files.push({ name: path, data: new Uint8Array(await blob.arrayBuffer()) });
+        made.push({ name: path.slice(top.length), group: o.group, output: o.label, use: o.use, bytes: blob.size });
+      }
+    }
+  } finally { shared = null; }
+  const d = SP.get(), pal = d.palette;
+  files.unshift({ name: top + "README.txt", data: enc(readme(made, d)) });
+  files.push({ name: top + "manifest.json", data: enc(JSON.stringify({
+    schema: "sleevepress.kit/3", generated: new Date().toISOString(),
+    release: d.release, palette: { bg: pal.bg, ink: pal.ink, accent: pal.accent, name: pal.name }, tracks: d.tracks.length,
+    files: made.map(({ group, ...m }) => m),
+  }, null, 2)) });
+  return { blob: PDF.zip(files), made, name: `${cat()}_release-kit.zip` };
 }
 async function buildZip() {
   const p = picked(), sel = OUTS.filter(o => p.has(o.id) && !missing(o));
   if (!sel.length) return SP.toast("Tick at least one file.");
   zipBtn.dataset.busy = "1"; zipBtn.disabled = true;
-  const files = [], made = [];
   try {
-    for (let i = 0; i < sel.length; i++) {
-      const o = sel[i];
-      zipBtn.textContent = `Building ${i + 1} / ${sel.length}…`;
-      await new Promise(r => setTimeout(r, 16));
-      for (const [name, blob] of await filesOf(o)) {
-        files.push({ name, data: new Uint8Array(await blob.arrayBuffer()) });
-        made.push({ name, output: o.label, use: o.use, bytes: blob.size });
-      }
-    }
-    const d = SP.get(), pal = d.palette;
-    files.push({ name: "manifest.json", data: enc(JSON.stringify({
-      schema: "sleevepress.kit/2", generated: new Date().toISOString(),
-      release: d.release, palette: { bg: pal.bg, ink: pal.ink, accent: pal.accent, name: pal.name }, tracks: d.tracks.length, files: made,
-    }, null, 2)) });
+    const z = await makeZip(sel, async (i, n) => { zipBtn.textContent = `Building ${i + 1} / ${n}…`; await new Promise(r => setTimeout(r, 16)); });
     zipBtn.textContent = "Zipping…"; await new Promise(r => setTimeout(r, 16));
-    SP.download(PDF.zip(files), `${cat()}_release-kit.zip`);
-    SP.toast(`Zip ready: ${made.length} file${made.length === 1 ? "" : "s"} + manifest`);
+    SP.download(z.blob, z.name);
+    preflight();
+    const big = pngBytes && pngBytes.size > SIZE_CAP && z.made.some(m => m.output === "Cover, 3000 px");
+    SP.toast(`Zip ready: ${z.made.length} file${z.made.length === 1 ? "" : "s"} + README` + (big ? `. The cover PNG is ${mb(pngBytes.size)}: use the JPEG if your distributor refuses it.` : ""));
   } catch (e) { console.error(e); SP.toast("Couldn't build the zip."); }
   delete zipBtn.dataset.busy; zipBtn.textContent = "Download selected (.zip)"; syncPicks();
 }
+
+/* for tests */
+window.ExportKit = {
+  OUTS, storeIssues: () => storeIssues(SP.get()), storeNotes: () => storeNotes(SP.get()), infoText, youtubeText,
+  zip: (ids) => makeZip(OUTS.filter(o => ids.includes(o.id) && !missing(o))),
+};
 
 App.view("export", {
   label: "Export",

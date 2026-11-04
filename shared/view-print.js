@@ -5,7 +5,7 @@
 const h = App.h;
 const PPM_PDF = 300 / 25.4, PPM_PREVIEW = 2.6, PPM_THUMB = 1.4;
 const PAPER = { A4: { w: 210, h: 297, label: "A4" }, Letter: { w: 215.9, h: 279.4, label: "US Letter" } };
-const MARGIN = 10, GAP = 4, BLEED = 3, CROP_LEN = 4, VINYL_HOLE = 7.24;
+const MARGIN = 10, GAP = 4, BLEED = 3, CROP_LEN = 4, VINYL_HOLE = 7.24, SAFE = 3;   // SAFE: keep words this far inside the cut
 
 const PIECES = [
   { id: "booklet", name: "CD front insert", help: "The cover of a CD case (12 × 12 cm). Slides in under the clips inside the lid." },
@@ -23,7 +23,7 @@ const GRID_PRESETS = [
   { id: "v4let", name: "4 per page, 100 mm round (US Letter)", paper: "Letter", g: { cols: 2, rows: 2, d: 100, x: 53.975, y: 87.7, px: 107.95, py: 104 } },
 ];
 const DEF = {
-  paper: "A4", crops: true, bleed: true, folds: true, whiteHole: true, layout: "free", fill: false, preset: "cd2a4",
+  paper: "A4", crops: true, bleed: true, folds: true, whiteHole: true, safe: true, layout: "free", fill: false, preset: "cd2a4",
   pieces: { booklet: { on: true, n: 1 } }, discD: 117, discHole: 41, vinylD: 100, sticker: 50,
   grid: { ...GRID_PRESETS[0].g, nx: 0, ny: 0 },
 };
@@ -108,6 +108,7 @@ function layout(o, db) {
     const s = it.s, rot = it.rot, w = rot ? s.h : s.w, hh = rot ? s.w : s.h;
     pg.ops.push({ t: "img", key: job(it.id, it.side, 0, rot), x: tx - b, y: ty - b, w: w + b * 2, h: hh + b * 2 });
     if (o.crops) pg.ops.push({ t: "crops", x: tx, y: ty, w, h: hh, len: CROP_LEN, gap: b + 1 });
+    pg.ops.push({ t: "safe", x: tx + SAFE, y: ty + SAFE, w: w - SAFE * 2, h: hh - SAFE * 2 });
     if (o.folds) for (const [x1, y1, x2, y2] of s.folds || []) {
       const m = (x, y) => rot ? [tx + (s.h - y), ty + x] : [tx + x, ty + y];
       const a = m(x1, y1), c = m(x2, y2), ext = cropPad + b;   // run the fold out into the crop-mark margin too
@@ -120,6 +121,7 @@ function layout(o, db) {
     pg.ops.push({ t: "img", key: job(it.id, it.side, D, false), x: cx - r - b, y: cy - r - b, w: D + b * 2, h: D + b * 2, clip: "circle" });
     pg.ops.push({ t: "circle", cx, cy, r, o: cut });
     const hr = Math.min(it.s.hole, D - 4) / 2;
+    if (r - SAFE > hr + SAFE) pg.ops.push({ t: "safe", cx, cy, r: r - SAFE, hr: hr > 0 ? hr + SAFE : 0 });
     if (hr > 0) {
       if (o.whiteHole) pg.ops.push({ t: "circle", cx, cy, r: hr, o: { width: 0.2, gray: 0.35, fill: 1, strokeToo: true } });
       else pg.ops.push({ t: "circle", cx, cy, r: hr, o: cut });
@@ -185,6 +187,7 @@ function layout(o, db) {
         const tx = ox + c * (cell + sg) + b, ty = oy + r * (cell + sg) + b;
         pg.ops.push({ t: "img", key: job("sticker", "", 0, false), x: tx - b, y: ty - b, w: cell, h: cell });
         if (o.crops) pg.ops.push({ t: "rect", x: tx, y: ty, w: s.w, h: s.w, o: cut });
+        pg.ops.push({ t: "safe", x: tx + SAFE, y: ty + SAFE, w: s.w - SAFE * 2, h: s.w - SAFE * 2 });
       }
     }
   }
@@ -214,8 +217,8 @@ function cropLines(op) {
   }
   return L;
 }
-function toPdf(L, cv) {
-  const d = PDF.doc();
+function toPdf(L, cv, info) {
+  const d = PDF.doc(info);
   for (const pg of L.pages) {
     const p = d.page(pg.w, pg.h);
     for (const op of pg.ops) {
@@ -229,7 +232,8 @@ function toPdf(L, cv) {
   }
   return d.blob();
 }
-function drawPage(canvas, pg, cv, k) {
+/* showSafe: draw the "safe" ops (the preview's blue line; the PDF never prints them) */
+function drawPage(canvas, pg, cv, k, showSafe = false) {
   canvas.width = Math.round(pg.w * k); canvas.height = Math.round(pg.h * k);
   const x = canvas.getContext("2d");
   x.fillStyle = "#fff"; x.fillRect(0, 0, canvas.width, canvas.height);
@@ -248,20 +252,37 @@ function drawPage(canvas, pg, cv, k) {
       x.beginPath(); x.arc(op.cx * k, op.cy * k, op.r * k, 0, Math.PI * 2);
       if (op.o.fill != null) { const g = Math.round(op.o.fill * 255); x.fillStyle = `rgb(${g},${g},${g})`; x.fill(); }
       if (op.o.fill == null || op.o.strokeToo) { stroke(op.o); x.stroke(); }
+    } else if (op.t === "safe") {
+      if (!showSafe) continue;
+      x.save(); x.strokeStyle = "rgba(0, 150, 220, .9)"; x.lineWidth = Math.max(0.8, 0.25 * k); x.setLineDash([1.2 * k, 1.2 * k]); x.beginPath();
+      if (op.r) { x.arc(op.cx * k, op.cy * k, op.r * k, 0, Math.PI * 2); if (op.hr) { x.moveTo((op.cx + op.hr) * k, op.cy * k); x.arc(op.cx * k, op.cy * k, op.hr * k, 0, Math.PI * 2); } }
+      else x.rect(op.x * k, op.y * k, op.w * k, op.h * k);
+      x.stroke(); x.restore();
     } else if (op.t === "text") {
       const g = Math.round(op.gray * 255); x.fillStyle = `rgb(${g},${g},${g})`; x.font = `${op.size * 0.3528 * k}px Helvetica, Arial, sans-serif`; x.fillText(op.s, op.x * k, op.y * k);
     }
   }
   x.setLineDash([]);
 }
-const fileName = (db, o) => `${SP.safeName(db.release.catalog || db.release.artist || "release") || "release"}_print_${o.paper}.pdf`;
+const plain = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");   // "Björk" → "Bjork" in file names
+const fileName = (db, o) => `${SP.safeName(plain(db.release.catalog || db.release.artist)) || "release"}_print_${o.paper}.pdf`;
 
+/* Document properties: what a print shop sees in File → Properties, and the title a viewer shows. */
+function pdfInfo(db, o) {
+  const r = db.release, what = PIECES.filter(P => pieceOn(o, P.id)).map(P => P.name);
+  return {
+    title: [[r.artist, SP.titleLine(r)].filter(Boolean).join(" — "), "print sheet"].filter(Boolean).join(", "),
+    author: r.artist || r.label || "",
+    subject: `${what.join(", ")} · ${PAPER[o.paper].label} · print at 100% / actual size`,
+    keywords: [r.catalog, r.artist, SP.titleLine(r), r.label].filter(Boolean).join(", "),
+  };
+}
 async function smallEnv() { return Makers.env(SP.get(), await App.smallImage(), await SP.logo.image()); }
 async function buildPdf(o) {
   const db = SP.get(), L = layout(o, db);
   if (!L.pages.length) return null;
   const e = await App.env(), cv = await renderJobs(L, e, o, PPM_PDF);
-  return { blob: toPdf(L, cv), pages: L.pages.length, name: fileName(db, o) };
+  return { blob: toPdf(L, cv, pdfInfo(db, o)), pages: L.pages.length, name: fileName(db, o) };
 }
 
 /* ---------- view ---------- */
@@ -291,7 +312,8 @@ function mount(el) {
             h("label", { class: "check" }, h("input", { type: "checkbox", id: "pr-crops" }), "Crop marks"),
             h("label", { class: "check" }, h("input", { type: "checkbox", id: "pr-bleed" }), "3 mm bleed"),
             h("label", { class: "check" }, h("input", { type: "checkbox", id: "pr-folds" }), "Fold lines"),
-            h("label", { class: "check" }, h("input", { type: "checkbox", id: "pr-whitehole" }), "White centre hole")),
+            h("label", { class: "check" }, h("input", { type: "checkbox", id: "pr-whitehole" }), "White centre hole"),
+            h("label", { class: "check", title: "A blue line 3 mm inside each cut: keep words inside it. Only on the preview, never printed." }, h("input", { type: "checkbox", id: "pr-safe" }), "Show safe area")),
           h("div", { class: "pr-roundopts", id: "pr-roundopts" },
             h("label", { class: "f" }, h("span", { text: "Round labels" }),
               h("select", { id: "pr-layout" }, h("option", { value: "free", text: "Free (cut by hand)" }), h("option", { value: "grid", text: "Label sheet grid" }))),
@@ -309,6 +331,7 @@ function mount(el) {
           h("div", { class: "pr-pager" },
             h("button", { type: "button", class: "btn small", id: "pr-prev", "aria-label": "Previous page", text: "‹ Prev" }),
             h("button", { type: "button", class: "btn small", id: "pr-next", "aria-label": "Next page", text: "Next ›" })),
+          h("p", { class: "hint pr-safenote", id: "pr-safenote" }, h("i", { "aria-hidden": "true" }), "Blue line: the safe area. Keep words inside it so nothing important is trimmed off. It isn't printed."),
           h("div", { class: "pr-warn", id: "pr-warn", hidden: true }),
           h("button", { type: "button", class: "btn primary pr-dl", id: "pr-dl", text: "Download PDF" }),
           h("p", { class: "hint pr-note" }, h("b", { text: "Print at 100% / Actual size" }), ", not Fit to page. Measure the first print: the booklet should be exactly 120 mm across.")))));
@@ -316,7 +339,7 @@ function mount(el) {
   buildPieces();
   const $ = (id) => el.querySelector("#" + id);
   SP.bindSeg($("pr-paper"), () => opts().paper, (v) => save({ paper: v }));
-  for (const [id, key] of [["pr-crops", "crops"], ["pr-bleed", "bleed"], ["pr-folds", "folds"], ["pr-whitehole", "whiteHole"], ["pr-fill", "fill"]])
+  for (const [id, key] of [["pr-crops", "crops"], ["pr-bleed", "bleed"], ["pr-folds", "folds"], ["pr-whitehole", "whiteHole"], ["pr-safe", "safe"], ["pr-fill", "fill"]])
     $(id).addEventListener("change", (ev) => save({ [key]: ev.target.checked }));
   $("pr-layout").addEventListener("change", (ev) => save({ layout: ev.target.value }));
   $("pr-preset").addEventListener("change", (ev) => {
@@ -382,7 +405,7 @@ function syncControls(o) {
   const active = document.activeElement, set = (inp, v) => { if (inp && inp !== active && String(inp.value) !== String(v)) inp.value = v; };
   const $ = (id) => root.querySelector("#" + id);
   root.querySelectorAll("#pr-paper button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === o.paper)));
-  $("pr-crops").checked = o.crops; $("pr-bleed").checked = o.bleed; $("pr-folds").checked = o.folds; $("pr-whitehole").checked = o.whiteHole; $("pr-fill").checked = o.fill;
+  $("pr-crops").checked = o.crops; $("pr-bleed").checked = o.bleed; $("pr-folds").checked = o.folds; $("pr-whitehole").checked = o.whiteHole; $("pr-safe").checked = o.safe; $("pr-fill").checked = o.fill;
   $("pr-layout").value = o.layout; $("pr-preset").value = GRID_PRESETS.some(p => p.id === o.preset) ? o.preset : "custom";
   $("pr-grid").hidden = o.layout !== "grid";
   root.querySelectorAll("[data-g]").forEach(inp => set(inp, o.grid[inp.dataset.g]));
@@ -452,7 +475,8 @@ const schedulePage = SP.debounce(() => {
     for (const op of page.ops) if (op.key) need.set(op.key, L.jobs.get(op.key));
     const cv = await renderJobs({ jobs: need }, await smallEnv(), o, PPM_PREVIEW);
     if (my !== pageGen) return;
-    drawPage(cvs, page, cv, PPM_PREVIEW);
+    drawPage(cvs, page, cv, PPM_PREVIEW, o.safe);
+    root.querySelector("#pr-safenote").hidden = !o.safe;
     info.textContent = `page ${pageIdx + 1} of ${L.pages.length} · ${PAPER[o.paper].label}`;
     toggles(pageIdx, L.pages.length);
   });
