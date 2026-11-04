@@ -32,8 +32,10 @@ const draw = SP.rafOnce(async () => {
   if (!visible) { stale = true; return; }
   const gen = ++drawGen, snap = { ...st }, c = document.createElement("canvas"); c.width = c.height = PREVIEW;
   const b = await SR.render(c, snap, image, logo);
-  if (gen !== drawGen) return;   // a newer render has started; this one is out of date
-  canvas.getContext("2d").drawImage(c, 0, 0);
+  // renders can overlap, so each gets its own canvas; freeing it at once (width 0) matters on iOS, whose total canvas
+  // memory is capped and isn't given back until garbage collection
+  if (gen !== drawGen) { c.width = 0; return; }   // a newer render has started; this one is out of date
+  canvas.getContext("2d").drawImage(c, 0, 0); c.width = 0;
   boxes = b || {}; positionSel();
   const said = describeCover(); if (descEl.textContent !== said) descEl.textContent = said;
   if (wordsBox) wordsBox._fit(!!boxes.titleShrunk && st.titleSize > (boxes.titleMaxSize || 0) + 2);
@@ -706,7 +708,9 @@ async function download() {
   const size = +(st.exportSize || 3000), c = document.createElement("canvas"); c.width = c.height = size;
   await SR.render(c, st, image, logo);
   const jpg = (prefs.fmt || "jpg") === "jpg";   // the grain makes PNGs huge (~15 MB at 3000 px); JPG at 0.92 is a few MB and what distributors expect
-  SP.download(await SP.canvasBlob(c, jpg ? "image/jpeg" : "image/png", jpg ? 0.92 : undefined), SR.filename(st, size).replace(/\.png$/, jpg ? ".jpg" : ".png"));
+  const blob = await SP.canvasBlob(c, jpg ? "image/jpeg" : "image/png", jpg ? 0.92 : undefined);
+  c.width = 0;   // a 3000 px canvas is 36 MB: give it back now
+  SP.download(blob, SR.filename(st, size).replace(/\.png$/, jpg ? ".jpg" : ".png"));
 }
 
 App.view("design", {
